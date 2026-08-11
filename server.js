@@ -11,10 +11,11 @@ const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
 const DATA_DIR = path.join(__dirname, 'data');
 const API_KEYS_FILE = path.join(DATA_DIR, '_api_keys.json');
+const MSG_TRACKER_FILE = path.join(DATA_DIR, '_msg_tracker.json');
 const BASE_URL = 'https://databasetele.pie.host';
 
 // ==========================================
-// 1. HELPER STORAGE & FILE SYSTEM
+// 1. HELPER STORAGE & TRACKER FILE
 // ==========================================
 async function ensureDataDir() {
   try {
@@ -53,6 +54,22 @@ async function deleteApiKey(key) {
     return true;
   }
   return false;
+}
+
+// Tracking Message ID agar 1 DB HANYA punya 1 pesan/file aktif di Grup
+async function getMsgTracker() {
+  try {
+    const raw = await fs.readFile(MSG_TRACKER_FILE, 'utf8');
+    return JSON.parse(raw);
+  } catch (e) {
+    return {};
+  }
+}
+
+async function saveMsgTracker(dbName, messageId) {
+  const tracker = await getMsgTracker();
+  tracker[dbName] = messageId;
+  await fs.writeFile(MSG_TRACKER_FILE, JSON.stringify(tracker, null, 2), 'utf8');
 }
 
 function generateRecordId(prefix = 'rec') {
@@ -94,7 +111,6 @@ async function createDatabase(dbName, initialData = []) {
   return payload;
 }
 
-// FUNGSI KHUSUS UNTUK MENGHAPUS FILE DATABASE
 async function deleteDatabaseFile(dbName) {
   await ensureDataDir();
   const filePath = getFilePath(dbName);
@@ -106,6 +122,9 @@ async function deleteDatabaseFile(dbName) {
   }
 }
 
+// ==========================================
+// 2. SMART AUTO-REPLACE BACKUP ENGINE
+// ==========================================
 async function sendBackupToTelegramGroup(dbName) {
   if (!bot) return;
   const groupId = process.env.GROUP_ID;
@@ -115,20 +134,36 @@ async function sendBackupToTelegramGroup(dbName) {
     const filePath = getFilePath(dbName);
     const content = await fs.readFile(filePath, 'utf8');
     const buffer = Buffer.from(content, 'utf8');
+    const tracker = await getMsgTracker();
 
-    const caption = `📦 *BACKUP DATABASE JSON*\n📄 Database: \`${dbName}\`\n🕒 Waktu: ${new Date().toLocaleString('id-ID')}`;
+    // Hapus pesan file lama di grup jika ada (supaya file tidak menumpuk)
+    if (tracker[dbName]) {
+      try {
+        await bot.telegram.deleteMessage(groupId, tracker[dbName]);
+      } catch (delErr) {
+        // Abaikan jika pesan lama sudah terhapus
+      }
+    }
+
+    const caption = `📦 *LIVE AUTO-BACKUP DATABASE*\n📄 Database: \`${dbName}\`\n🕒 Update Terakhir: ${new Date().toLocaleString('id-ID')}`;
     
-    await bot.telegram.sendDocument(groupId, {
+    // Kirim file backup versi terbaru
+    const sentMsg = await bot.telegram.sendDocument(groupId, {
       source: buffer,
-      filename: `database_${dbName}.json`
+      filename: `${dbName}.json`
     }, { caption, parse_mode: 'Markdown' });
+
+    // Simpan ID pesan baru untuk di-replace pada backup berikutnya
+    if (sentMsg && sentMsg.message_id) {
+      await saveMsgTracker(dbName, sentMsg.message_id);
+    }
   } catch (err) {
-    console.error(`[Backup Error ${dbName}]`, err.message);
+    console.error(`[Auto Backup Error ${dbName}]`, err.message);
   }
 }
 
 // ==========================================
-// 2. EXPRESS APP & AUTH
+// 3. EXPRESS APP & AUTH
 // ==========================================
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -156,7 +191,7 @@ async function apiKeyAuth(req, res, next) {
 }
 
 // ==========================================
-// 3. REST API ENDPOINTS
+// 4. REST API ENDPOINTS
 // ==========================================
 app.get('/api/databases', apiKeyAuth, async (req, res) => {
   try {
@@ -186,12 +221,11 @@ app.post('/api/db/:name', apiKeyAuth, async (req, res) => {
   }
 });
 
-// ENDPOINT REST API UNTUK HAPUS DATABASE
 app.delete('/api/db/:name', apiKeyAuth, async (req, res) => {
   try {
     const deleted = await deleteDatabaseFile(req.params.name);
     if (deleted) {
-      res.json({ success: true, message: `Database '${req.params.name}' berhasil dihapus dari server.` });
+      res.json({ success: true, message: `Database '${req.params.name}' berhasil dihapus.` });
     } else {
       res.status(404).json({ success: false, error: `Database '${req.params.name}' tidak ditemukan.` });
     }
@@ -214,6 +248,7 @@ app.get('/api/db/:name/records', apiKeyAuth, async (req, res) => {
   }
 });
 
+// AUTO BACKUP REALTIME + AUTO REPLACE DI GRUP TELEGRAM
 app.post('/api/db/:name/records', apiKeyAuth, async (req, res) => {
   try {
     let db;
@@ -231,7 +266,9 @@ app.post('/api/db/:name/records', apiKeyAuth, async (req, res) => {
     db.data.push(newRecord);
     await fs.writeFile(getFilePath(req.params.name), JSON.stringify(db, null, 2), 'utf8');
 
+    // Otomatis menimpa file backup di grup tanpa bikin pesan baru bertumpuk!
     sendBackupToTelegramGroup(req.params.name).catch(() => {});
+
     res.status(201).json({ success: true, data: newRecord });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
@@ -239,7 +276,7 @@ app.post('/api/db/:name/records', apiKeyAuth, async (req, res) => {
 });
 
 // ==========================================
-// 4. BOT TELEGRAM WITH MENU BUTTONS
+// 5. BOT TELEGRAM WITH MENU BUTTONS
 // ==========================================
 let bot = null;
 if (process.env.BOT_TOKEN) {
@@ -287,7 +324,7 @@ if (process.env.BOT_TOKEN) {
 
       await saveApiKey(newKey, rawName);
       await createDatabase(dbName, []);
-      sendBackupToTelegramGroup(dbName).catch(() => {});
+      await sendBackupToTelegramGroup(dbName);
 
       ctx.reply(
         `✅ *API KEY & DATABASE BERHASIL DIBUAT!*\n\n` +
@@ -300,9 +337,9 @@ if (process.env.BOT_TOKEN) {
         `• Value: \`Bearer ${newKey}\`\n\n` +
         `----------------------------------------\n` +
         `🌐 *DAFTAR URL ENDPOINT API:*\n\n` +
-        `1️⃣ *Ambil Semua Record Data (Load Data):*\n` +
+        `1️⃣ *Ambil Semua Record Data:*\n` +
         `\`GET ${BASE_URL}/api/db/${dbName}/records\`\n\n` +
-        `2️⃣ *Tambah Record Baru (Kirim Data/Pesan):*\n` +
+        `2️⃣ *Tambah Record Baru:*\n` +
         `\`POST ${BASE_URL}/api/db/${dbName}/records\`\n\n` +
         `3️⃣ *Hapus Database Ini:*\n` +
         `\`DELETE ${BASE_URL}/api/db/${dbName}\``,
@@ -320,7 +357,7 @@ if (process.env.BOT_TOKEN) {
       const dbs = await listDatabases();
       ctx.reply(
         `📂 *Total Database:* ${dbs.length}\n\n` + 
-        dbs.map(d => `• \`${d}\` (Hapus: \`/deletedb ${d}\`)`).join('\n\n'), 
+        dbs.map(d => `• \`${d}\` (Backup: \`/backup ${d}\` | Hapus: \`/deletedb ${d}\`)`).join('\n\n'), 
         { parse_mode: 'Markdown' }
       );
     });
@@ -346,7 +383,6 @@ if (process.env.BOT_TOKEN) {
       }
     });
 
-    // COMMAND HAPUS DATABASE DARI TELEGRAM
     bot.command('deletedb', adminMiddleware, async (ctx) => {
       const args = ctx.message.text.split(' ').slice(1);
       const name = args[0];
@@ -354,7 +390,7 @@ if (process.env.BOT_TOKEN) {
       
       const deleted = await deleteDatabaseFile(name);
       if (deleted) {
-        ctx.reply(`🗑️ Database \`${name}\` berhasil dihapus permanen dari server!`, { parse_mode: 'Markdown' });
+        ctx.reply(`🗑️ Database \`${name}\` berhasil dihapus permanen!`, { parse_mode: 'Markdown' });
       } else {
         ctx.reply(`❌ Database \`${name}\` tidak ditemukan.`, { parse_mode: 'Markdown' });
       }
@@ -378,7 +414,7 @@ if (process.env.BOT_TOKEN) {
       if (!name) return ctx.reply('⚠️ Masukkan nama DB. Contoh: `/backup chating`', { parse_mode: 'Markdown' });
       try {
         await sendBackupToTelegramGroup(name);
-        ctx.reply(`📦 File backup \`${name}\` berhasil dikirim ke Grup Telegram!`, { parse_mode: 'Markdown' });
+        ctx.reply(`📦 File backup \`${name}\` di Grup Telegram telah diperbarui!`, { parse_mode: 'Markdown' });
       } catch (err) {
         ctx.reply(`❌ Gagal backup: ${err.message}`);
       }
@@ -404,7 +440,7 @@ if (process.env.BOT_TOKEN) {
 }
 
 // ==========================================
-// 5. SERVER RUNNER
+// 6. SERVER RUNNER
 // ==========================================
 process.on('uncaughtException', (err) => console.error('[Uncaught Exception]', err.message));
 process.on('unhandledRejection', (reason) => console.error('[Unhandled Rejection]', reason));
