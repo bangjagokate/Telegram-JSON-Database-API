@@ -10,6 +10,7 @@ const { apiLimiter } = require('./middleware/rateLimit');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const HOST = '0.0.0.0'; // Wajib untuk routing internal PieHost
 
 // Middleware Keamanan & Body Parsing
 app.use(cors());
@@ -18,6 +19,22 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Layani File Statis Web Admin & Dokumentasi
 app.use(express.static(path.join(__dirname, '../public')));
+
+// Root Endpoint (Mencegah Error 404 saat Rollout Health Check)
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/docs.html'));
+});
+
+// Endpoint Public Health Check
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    telegram: !!bot,
+    storage: true,
+    database: true,
+    uptime: Math.floor(process.uptime())
+  });
+});
 
 // Inisialisasi Telegram Bot
 let bot = null;
@@ -31,22 +48,11 @@ try {
 // Jalankan Pemulihan Database Otomatis
 runStartupRecovery(bot)
   .then(() => {
-    console.log('[Recovery System] Inisialisasi sistem pemulihan selesai.');
+    console.log('[Recovery System] Inisialisasi pemulihan selesai.');
   })
   .catch((recErr) => {
-    console.error('[Recovery System Error] Gagal menjalankan pemulihan awal:', recErr.message);
+    console.error('[Recovery System Error] Gagal pemulihan awal:', recErr.message);
   });
-
-// Endpoint Public Health Check (Digunakan PieHost untuk verifikasi status app)
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    telegram: !!bot,
-    storage: true,
-    database: true,
-    uptime: Math.floor(process.uptime())
-  });
-});
 
 // Import Router API
 const dbRoutes = require('./api/database')(bot);
@@ -62,12 +68,12 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, error: 'Internal Server Error' });
 });
 
-// Jalankan Server
-app.listen(PORT, () => {
+// Jalankan Server pada HOST 0.0.0.0
+app.listen(PORT, HOST, () => {
   console.log(`==========================================`);
   console.log(`🚀 Telegram JSON Database API is running`);
-  console.log(`📡 Port: ${PORT}`);
-  console.log(`📑 API Docs: http://localhost:${PORT}/docs.html`);
-  console.log(`🖥️ Admin Panel: http://localhost:${PORT}/admin.html`);
+  console.log(`📡 Bound to: http://${HOST}:${PORT}`);
+  console.log(`📑 API Docs: http://${HOST}:${PORT}/docs.html`);
+  console.log(`🖥️ Admin Panel: http://${HOST}:${PORT}/admin.html`);
   console.log(`==========================================`);
 });
