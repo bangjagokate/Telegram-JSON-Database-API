@@ -6,6 +6,7 @@ const pendingBackups = new Set();
 let debounceTimer = null;
 
 async function executeBackup(bot, dbName) {
+  if (!bot) throw new Error('Bot instance is not initialized.');
   const groupId = process.env.GROUP_ID;
   if (!groupId) throw new Error('GROUP_ID environment variable is missing.');
 
@@ -35,7 +36,7 @@ function queueBackup(bot, dbName) {
         console.error(`[Debounced Backup Failed] ${name}:`, err.message);
       }
     }
-  }, 10000); // 10 detik debounce queue
+  }, 10000);
 }
 
 async function backupAll(bot) {
@@ -53,16 +54,16 @@ async function backupAll(bot) {
 }
 
 async function findLatestBackupInGroup(bot, dbName) {
+  if (!bot) return null;
   const groupId = process.env.GROUP_ID;
   const updates = await bot.telegram.getUpdates({ limit: 100 }).catch(() => []);
   
-  // Mencari dari update history jika ada
   let targetFile = null;
   const expectedFilename = `database_${dbName}.json`;
 
   for (const u of updates.reverse()) {
     const msg = u.message || u.channel_post;
-    if (msg && msg.chat.id.toString() === groupId.toString() && msg.document) {
+    if (msg && msg.chat && msg.chat.id.toString() === groupId.toString() && msg.document) {
       if (msg.document.file_name === expectedFilename) {
         targetFile = msg.document.file_id;
         break;
@@ -73,6 +74,7 @@ async function findLatestBackupInGroup(bot, dbName) {
 }
 
 async function restoreFromGroup(bot, dbName, explicitFileId = null) {
+  if (!bot) throw new Error('Bot instance is not initialized.');
   let fileId = explicitFileId;
   if (!fileId) {
     fileId = await findLatestBackupInGroup(bot, dbName);
@@ -86,7 +88,7 @@ async function restoreFromGroup(bot, dbName, explicitFileId = null) {
   const response = await fetch(fileLink.href);
   const text = await response.text();
 
-  const parsed = JSON.parse(text); // Validasi JSON
+  const parsed = JSON.parse(text);
   const filePath = getFilePath(dbName);
   await fs.writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
   return parsed;
