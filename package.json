@@ -2,10 +2,10 @@
   "name": "telegram-json-db",
   "version": "1.0.0",
   "description": "REST API Database berbasis JSON",
-  "main": "src/server.js",
+  "main": "server.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
