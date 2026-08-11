@@ -14,7 +14,7 @@ const API_KEYS_FILE = path.join(DATA_DIR, '_api_keys.json');
 const BASE_URL = 'https://databasetele.pie.host';
 
 // ==========================================
-// 1. HELPER STORAGE & API KEY MANAGEMENT
+// 1. HELPER STORAGE & FILE SYSTEM
 // ==========================================
 async function ensureDataDir() {
   try {
@@ -78,17 +78,13 @@ async function getDatabase(dbName) {
   return JSON.parse(raw);
 }
 
-// FUNGSI BUAT DATABASE (AMAN JIKA SUDAH ADA)
 async function createDatabase(dbName, initialData = []) {
   await ensureDataDir();
   const filePath = getFilePath(dbName);
   try {
     await fs.access(filePath);
-    // Jika sudah ada, kembalikan isi yang lama
     return await getDatabase(dbName);
-  } catch (e) {
-    // Jika belum ada, buat file baru
-  }
+  } catch (e) {}
 
   const payload = {
     _meta: { database: dbName, version: 1, created_at: new Date().toISOString() },
@@ -96,6 +92,18 @@ async function createDatabase(dbName, initialData = []) {
   };
   await fs.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
   return payload;
+}
+
+// FUNGSI KHUSUS UNTUK MENGHAPUS FILE DATABASE
+async function deleteDatabaseFile(dbName) {
+  await ensureDataDir();
+  const filePath = getFilePath(dbName);
+  try {
+    await fs.unlink(filePath);
+    return true;
+  } catch (err) {
+    return false;
+  }
 }
 
 async function sendBackupToTelegramGroup(dbName) {
@@ -178,13 +186,26 @@ app.post('/api/db/:name', apiKeyAuth, async (req, res) => {
   }
 });
 
+// ENDPOINT REST API UNTUK HAPUS DATABASE
+app.delete('/api/db/:name', apiKeyAuth, async (req, res) => {
+  try {
+    const deleted = await deleteDatabaseFile(req.params.name);
+    if (deleted) {
+      res.json({ success: true, message: `Database '${req.params.name}' berhasil dihapus dari server.` });
+    } else {
+      res.status(404).json({ success: false, error: `Database '${req.params.name}' tidak ditemukan.` });
+    }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/api/db/:name/records', apiKeyAuth, async (req, res) => {
   try {
     let db;
     try {
       db = await getDatabase(req.params.name);
     } catch (e) {
-      // Auto-create jika DB belum ada
       db = await createDatabase(req.params.name, []);
     }
     res.json({ success: true, total: db.data.length, data: db.data });
@@ -199,7 +220,6 @@ app.post('/api/db/:name/records', apiKeyAuth, async (req, res) => {
     try {
       db = await getDatabase(req.params.name);
     } catch (e) {
-      // Auto-create jika DB belum ada
       db = await createDatabase(req.params.name, []);
     }
 
@@ -254,10 +274,9 @@ if (process.env.BOT_TOKEN) {
     bot.hears('📖 Panduan & Endpoint URL', adminMiddleware, (ctx) => sendMainMenu(ctx));
 
     bot.hears('🔑 Buat API Key', adminMiddleware, (ctx) => {
-      ctx.reply('⚠️ Ketik perintah pembuatannya beserta nama aplikasinya:\n\n*Contoh:*\n`/makeapi listrik`\natau\n`/makeapi laundry`', { parse_mode: 'Markdown' });
+      ctx.reply('⚠️ Ketik perintah pembuatannya beserta nama aplikasinya:\n\n*Contoh:*\n`/makeapi listrik`', { parse_mode: 'Markdown' });
     });
 
-    // COMMAND MAKEAPI: OTOMATIS MEMBUAT DATABASE JUGA
     bot.command('makeapi', adminMiddleware, async (ctx) => {
       const args = ctx.message.text.split(' ').slice(1);
       const rawName = args.join(' ');
@@ -266,10 +285,7 @@ if (process.env.BOT_TOKEN) {
       const dbName = rawName.toLowerCase().replace(/[^a-z0-9_-]/g, '');
       const newKey = `key_${crypto.randomBytes(12).toString('hex')}`;
 
-      // 1. Simpan API Key Baru
       await saveApiKey(newKey, rawName);
-
-      // 2. OTOMATIS BUAT DATABASE DENGAN NAMA SAMA
       await createDatabase(dbName, []);
       sendBackupToTelegramGroup(dbName).catch(() => {});
 
@@ -288,8 +304,8 @@ if (process.env.BOT_TOKEN) {
         `\`GET ${BASE_URL}/api/db/${dbName}/records\`\n\n` +
         `2️⃣ *Tambah Record Baru (Kirim Data/Pesan):*\n` +
         `\`POST ${BASE_URL}/api/db/${dbName}/records\`\n\n` +
-        `3️⃣ *Cek Isi Seluruh Database:*\n` +
-        `\`GET ${BASE_URL}/api/db/${dbName}\``,
+        `3️⃣ *Hapus Database Ini:*\n` +
+        `\`DELETE ${BASE_URL}/api/db/${dbName}\``,
         { parse_mode: 'Markdown' }
       );
     });
@@ -302,7 +318,11 @@ if (process.env.BOT_TOKEN) {
 
     bot.hears('📂 Daftar Database', adminMiddleware, async (ctx) => {
       const dbs = await listDatabases();
-      ctx.reply(`📂 *Total Database:* ${dbs.length}\n\n` + dbs.map(d => `• \`${d}\` (URL: \`${BASE_URL}/api/db/${d}/records\`)`).join('\n\n'), { parse_mode: 'Markdown' });
+      ctx.reply(
+        `📂 *Total Database:* ${dbs.length}\n\n` + 
+        dbs.map(d => `• \`${d}\` (Hapus: \`/deletedb ${d}\`)`).join('\n\n'), 
+        { parse_mode: 'Markdown' }
+      );
     });
 
     bot.hears('➕ Buat DB Baru', adminMiddleware, (ctx) => {
@@ -323,6 +343,20 @@ if (process.env.BOT_TOKEN) {
         );
       } catch (err) {
         ctx.reply(`❌ Error: ${err.message}`);
+      }
+    });
+
+    // COMMAND HAPUS DATABASE DARI TELEGRAM
+    bot.command('deletedb', adminMiddleware, async (ctx) => {
+      const args = ctx.message.text.split(' ').slice(1);
+      const name = args[0];
+      if (!name) return ctx.reply('⚠️ Masukkan nama DB yang ingin dihapus. Contoh: `/deletedb test`', { parse_mode: 'Markdown' });
+      
+      const deleted = await deleteDatabaseFile(name);
+      if (deleted) {
+        ctx.reply(`🗑️ Database \`${name}\` berhasil dihapus permanen dari server!`, { parse_mode: 'Markdown' });
+      } else {
+        ctx.reply(`❌ Database \`${name}\` tidak ditemukan.`, { parse_mode: 'Markdown' });
       }
     });
 
