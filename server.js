@@ -4,13 +4,14 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
-const { Telegraf } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
 const DATA_DIR = path.join(__dirname, 'data');
 const API_KEYS_FILE = path.join(DATA_DIR, '_api_keys.json');
+const BASE_URL = 'https://databasetele.pie.host';
 
 // ==========================================
 // 1. HELPER STORAGE & API KEY MANAGEMENT
@@ -21,7 +22,6 @@ async function ensureDataDir() {
     try {
       await fs.access(API_KEYS_FILE);
     } catch (e) {
-      // Buat file penampung API Key default
       const defaultKey = process.env.API_KEY || 'Jd8Kp2xQ9mV7sL4nR6tY3wA8zC5eF1uH';
       const initialKeys = { [defaultKey]: { app_name: 'Master Key Admin', created_at: new Date().toISOString() } };
       await fs.writeFile(API_KEYS_FILE, JSON.stringify(initialKeys, null, 2), 'utf8');
@@ -114,7 +114,7 @@ async function sendBackupToTelegramGroup(dbName) {
 }
 
 // ==========================================
-// 2. EXPRESS APP & AUTHENTICATION
+// 2. EXPRESS APP & AUTH
 // ==========================================
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -124,10 +124,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public/admin.html')));
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok', telegram: !!bot, uptime: Math.floor(process.uptime()) }));
 
-// Dynamic API Key Auth (Memeriksa daftar API Key yang dibuat dari Telegram Bot)
 async function apiKeyAuth(req, res, next) {
   const authHeader = req.headers.authorization;
-
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ success: false, error: 'Format Authorization harus: Bearer API_KEY' });
   }
@@ -202,40 +200,47 @@ app.post('/api/db/:name/records', apiKeyAuth, async (req, res) => {
 });
 
 // ==========================================
-// 4. TELEGRAM BOT COMMANDS (KHUSUS ADMIN)
+// 4. BOT TELEGRAM WITH MENU BUTTONS
 // ==========================================
 let bot = null;
 if (process.env.BOT_TOKEN) {
   try {
     bot = new Telegraf(process.env.BOT_TOKEN);
 
-    // Filter Khusus Admin berdasarkan ADMIN_IDS
     const adminMiddleware = (ctx, next) => {
       const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim());
       const userId = ctx.from?.id?.toString();
       if (!adminIds.includes(userId)) {
-        return ctx.reply('⛔ Akses Ditolak! Hanya Admin yang terdaftar yang boleh mengelola API & Database.');
+        return ctx.reply('⛔ Akses Ditolak! Khusus Admin.');
       }
       return next();
     };
 
-    bot.start(adminMiddleware, (ctx) => {
+    // FUNGSI PANDUAN DENGAN TOMBOL MENU
+    const sendMainMenu = (ctx) => {
       ctx.reply(
-        '🤖 *Bot Management API & Database*\n\n' +
-        '*Perintah Admin API:*\n' +
-        '🔑 `/makeapi <nama_app>` - Buat API Key baru\n' +
-        '📜 `/listapi` - Lihat semua API Key\n' +
-        '❌ `/revokeapi <key>` - Hapus API Key\n\n' +
-        '*Perintah Database:*\n' +
-        '📂 `/database` - Lihat daftar DB\n' +
-        '➕ `/createdb <nama>` - Buat Database Baru\n' +
-        '📄 `/get <nama>` - Lihat isi JSON\n' +
-        '📦 `/backup <nama>` - Backup manual ke Grup',
-        { parse_mode: 'Markdown' }
+        '🤖 *PANEL UTAMA TELEGRAM JSON DB*\n\n' +
+        'Silakan klik tombol di bawah atau ketik perintah manual jika diperlukan:',
+        {
+          parse_mode: 'Markdown',
+          ...Markup.keyboard([
+            ['🔑 Buat API Key', '📜 Lihat Semua API Key'],
+            ['➕ Buat DB Baru', '📂 Daftar Database'],
+            ['📖 Panduan & Endpoint URL']
+          ]).resize()
+        }
       );
+    };
+
+    bot.start(adminMiddleware, (ctx) => sendMainMenu(ctx));
+    bot.hears('📖 Panduan & Endpoint URL', adminMiddleware, (ctx) => sendMainMenu(ctx));
+
+    // TOMBOL: BUAT API KEY
+    bot.hears('🔑 Buat API Key', adminMiddleware, (ctx) => {
+      ctx.reply('⚠️ Silakan ketik perintah pembuatannya beserta nama aplikasinya:\n\n*Contoh:*\n`/makeapi Aplikasi Listrik`\natau\n`/makeapi Aplikasi Laundry`', { parse_mode: 'Markdown' });
     });
 
-    // COMMAND 1: BUAT API KEY BARU
+    // COMMAND MAKEAPI DENGAN TEMPLATE FORMAT LENGKAP
     bot.command('makeapi', adminMiddleware, async (ctx) => {
       const args = ctx.message.text.split(' ').slice(1);
       const appName = args.join(' ');
@@ -244,40 +249,46 @@ if (process.env.BOT_TOKEN) {
       const newKey = `key_${crypto.randomBytes(12).toString('hex')}`;
       await saveApiKey(newKey, appName);
 
+      const dbExample = appName.toLowerCase().replace(/[^a-z0-9]/g, '');
+
       ctx.reply(
-        `✅ *API Key Berhasil Dibuat!*\n\n` +
-        `📱 *Aplikasi:* ${appName}\n` +
+        `✅ *API KEY BERHASIL DIBUAT!*\n\n` +
+        `📱 *Nama Aplikasi:* ${appName}\n` +
         `🔑 *API Key:* \`${newKey}\`\n\n` +
-        `*Cara Pakai di Header:* \n\`Authorization: Bearer ${newKey}\``,
+        `----------------------------------------\n` +
+        `📋 *HEADER AUTHENTICATION (WAJIB):*\n` +
+        `• Key: \`Authorization\`\n` +
+        `• Value: \`Bearer ${newKey}\`\n\n` +
+        `----------------------------------------\n` +
+        `🌐 *DAFTAR URL ENDPOINT API:*\n\n` +
+        `1️⃣ *Ambil Semua Daftar Database:*\n` +
+        `\`GET ${BASE_URL}/api/databases\`\n\n` +
+        `2️⃣ *Ambil Semua Record Data (Load Data):*\n` +
+        `\`GET ${BASE_URL}/api/db/${dbExample}/records\`\n\n` +
+        `3️⃣ *Tambah Record Baru (Kirim Data/Pesan):*\n` +
+        `\`POST ${BASE_URL}/api/db/${dbExample}/records\`\n\n` +
+        `4️⃣ *Buat Database Baru via API:*\n` +
+        `\`POST ${BASE_URL}/api/db/${dbExample}\``,
         { parse_mode: 'Markdown' }
       );
     });
 
-    // COMMAND 2: LIST SEMUA API KEY
-    bot.command('listapi', adminMiddleware, async (ctx) => {
+    // TOMBOL: LIST ALL API
+    bot.hears('📜 Lihat Semua API Key', adminMiddleware, async (ctx) => {
       const keys = await getValidApiKeys();
-      const list = Object.entries(keys).map(([k, v]) => `• *${v.app_name}*:\n  \`${k}\``).join('\n\n');
-      ctx.reply(`🔑 *Daftar API Key Aktif:*\n\n${list || 'Belum ada API Key.'}`, { parse_mode: 'Markdown' });
+      const list = Object.entries(keys).map(([k, v]) => `📱 *${v.app_name}*:\n  • Key: \`${k}\`\n  • Header: \`Bearer ${k}\``).join('\n\n');
+      ctx.reply(`🔑 *DAFTAR API KEY AKTIF:*\n\n${list || 'Belum ada API Key.'}\n\n*Cara Hapus Key:* \`/revokeapi <key>\``, { parse_mode: 'Markdown' });
     });
 
-    // COMMAND 3: HAPUS API KEY
-    bot.command('revokeapi', adminMiddleware, async (ctx) => {
-      const args = ctx.message.text.split(' ').slice(1);
-      const keyToRevoke = args[0];
-      if (!keyToRevoke) return ctx.reply('⚠️ Masukkan API Key yang mau dihapus. Contoh: `/revokeapi key_xxxx`', { parse_mode: 'Markdown' });
-
-      const deleted = await deleteApiKey(keyToRevoke);
-      if (deleted) {
-        ctx.reply(`🗑️ API Key \`${keyToRevoke}\` berhasil dicabut/dihapus.`, { parse_mode: 'Markdown' });
-      } else {
-        ctx.reply(`❌ API Key tidak ditemukan.`);
-      }
-    });
-
-    // COMMAND DATABASE
-    bot.command('database', adminMiddleware, async (ctx) => {
+    // TOMBOL: DAFTAR DATABASE
+    bot.hears('📂 Daftar Database', adminMiddleware, async (ctx) => {
       const dbs = await listDatabases();
-      ctx.reply(`📂 *Total Database:* ${dbs.length}\n` + dbs.map(d => `- \`${d}\``).join('\n'), { parse_mode: 'Markdown' });
+      ctx.reply(`📂 *Total Database:* ${dbs.length}\n\n` + dbs.map(d => `• \`${d}\` (URL: \`${BASE_URL}/api/db/${d}/records\`)`).join('\n\n'), { parse_mode: 'Markdown' });
+    });
+
+    // TOMBOL: BUAT DB BARU
+    bot.hears('➕ Buat DB Baru', adminMiddleware, (ctx) => {
+      ctx.reply('⚠️ Ketik perintah ini beserta nama database baru yang mau dibuat:\n\n*Contoh:*\n`/createdb listrik`', { parse_mode: 'Markdown' });
     });
 
     bot.command('createdb', adminMiddleware, async (ctx) => {
@@ -287,7 +298,11 @@ if (process.env.BOT_TOKEN) {
       try {
         await createDatabase(name);
         await sendBackupToTelegramGroup(name);
-        ctx.reply(`✅ Database \`${name}\` berhasil dibuat & di-backup ke Grup!`, { parse_mode: 'Markdown' });
+        ctx.reply(
+          `✅ Database \`${name}\` Berhasil Dibuat!\n\n` +
+          `🌐 *URL Endpoint Data:*\n\`${BASE_URL}/api/db/${name}/records\``,
+          { parse_mode: 'Markdown' }
+        );
       } catch (err) {
         ctx.reply(`❌ Error: ${err.message}`);
       }
@@ -314,6 +329,19 @@ if (process.env.BOT_TOKEN) {
         ctx.reply(`📦 File backup \`${name}\` berhasil dikirim ke Grup Telegram!`, { parse_mode: 'Markdown' });
       } catch (err) {
         ctx.reply(`❌ Gagal backup: ${err.message}`);
+      }
+    });
+
+    bot.command('revokeapi', adminMiddleware, async (ctx) => {
+      const args = ctx.message.text.split(' ').slice(1);
+      const keyToRevoke = args[0];
+      if (!keyToRevoke) return ctx.reply('⚠️ Masukkan API Key yang mau dihapus. Contoh: `/revokeapi key_xxxx`', { parse_mode: 'Markdown' });
+
+      const deleted = await deleteApiKey(keyToRevoke);
+      if (deleted) {
+        ctx.reply(`🗑️ API Key \`${keyToRevoke}\` berhasil dihapus.`, { parse_mode: 'Markdown' });
+      } else {
+        ctx.reply(`❌ API Key tidak ditemukan.`);
       }
     });
 
