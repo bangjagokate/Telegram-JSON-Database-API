@@ -177,7 +177,7 @@ async function apiKeyAuth(req, res, next) {
 }
 
 // ==========================================
-// 4. FIREBASE-STYLE WEB CONSOLE GUI
+// 4. FIREBASE CONSOLE WEB GUI (PAKEM MODE)
 // ==========================================
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -185,38 +185,29 @@ app.get('/', (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Firebase Realtime Database Console</title>
+  <title>Firebase Console Manager</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { background: #f0f2f5; color: #1c1e21; min-height: 100vh; display: flex; flex-direction: column; }
     
-    /* Header Console */
     .navbar { background: #039be5; color: #fff; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-    .navbar h1 { font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-    .nav-right { display: flex; align-items: center; gap: 10px; }
-    .key-badge { background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 12px; font-size: 12px; font-family: monospace; }
+    .navbar h1 { font-size: 18px; font-weight: 600; }
+    .btn-logout { background: #d32f2f; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; }
 
-    /* Layout Main */
-    .container { flex: 1; display: flex; flex-direction: column; padding: 15px; max-width: 1000px; margin: 0 auto; width: 100%; gap: 15px; }
+    .container { flex: 1; display: flex; flex-direction: column; padding: 15px; max-width: 900px; margin: 0 auto; width: 100%; gap: 15px; }
 
-    /* Login Box */
-    .login-card { background: #fff; border-radius: 8px; padding: 25px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; margin-top: 40px; }
-    .login-card input { width: 100%; max-width: 350px; padding: 10px 14px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; margin: 15px 0; outline: none; }
-    .login-card button { background: #039be5; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer; }
+    .login-card { background: #fff; border-radius: 8px; padding: 25px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; margin-top: 30px; }
+    .input-group { margin: 12px 0; text-align: left; }
+    .input-group label { display: block; font-size: 12px; font-weight: bold; color: #555; margin-bottom: 5px; }
+    .input-group input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; outline: none; }
+    .btn-login { width: 100%; background: #039be5; color: #fff; border: none; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 10px; }
 
-    /* Database Selector */
-    .db-selector { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 5px; }
-    .db-chip { background: #fff; border: 1px solid #ddd; padding: 8px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
-    .db-chip.active { background: #039be5; color: #fff; border-color: #039be5; }
-
-    /* Node Viewer */
     .node-panel { background: #fff; border-radius: 8px; border: 1px solid #e0e0e0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); padding: 20px; font-family: monospace; font-size: 13px; line-height: 1.8; overflow-x: auto; }
     .tree-row { margin-left: 18px; border-left: 2px solid #e0e0e0; padding-left: 10px; margin-top: 4px; }
     .key-name { color: #d32f2f; font-weight: bold; }
     .val-str { color: #2e7d32; }
     .val-num { color: #1976d2; }
     
-    /* Action Buttons */
     .btn-icon { background: none; border: none; font-size: 11px; cursor: pointer; margin-left: 6px; padding: 2px 5px; border-radius: 3px; }
     .btn-icon:hover { background: #eeeeee; }
     .btn-add { color: #1976d2; }
@@ -227,115 +218,101 @@ app.get('/', (req, res) => {
 <body>
 
   <div class="navbar">
-    <h1>🔥 Firebase Console</h1>
-    <div class="nav-right" id="navAuth">
-      <span class="key-badge" id="activeKeyTag">Belum Login</span>
-    </div>
+    <h1>🔥 Firebase Realtime Console</h1>
+    <button class="btn-logout" id="btnLogout" style="display:none;" onclick="logout()">LOGOUT</button>
   </div>
 
   <div class="container">
-    <!-- SCREEN 1: LOGIN API KEY -->
+    <!-- FORM LOGIN API KEY & DB NAME -->
     <div class="login-card" id="loginScreen">
-      <h2>🔐 Masuk Ke Console</h2>
-      <p style="font-size: 13px; color: #666; margin-top: 5px;">Masukkan API Key kamu untuk mengelola database:</p>
-      <div>
-        <input type="text" id="apiKeyInput" placeholder="key_xxxxxxxxx..." onkeypress="if(event.key==='Enter') loginWithKey()">
+      <h2 style="margin-bottom: 5px;">🔐 Akses Database</h2>
+      <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Masukkan Kunci API dan Nama Database milikmu:</p>
+      
+      <div class="input-group">
+        <label>API KEY:</label>
+        <input type="text" id="apiKeyInput" placeholder="Contoh: key_b1eaa5a75892eecc457d7d38">
       </div>
-      <button onclick="loginWithKey()">BUKA DATABASE</button>
+
+      <div class="input-group">
+        <label>NAMA DATABASE:</label>
+        <input type="text" id="dbNameInput" placeholder="Contoh: chatapp">
+      </div>
+
+      <button class="btn-login" onclick="loginAndConnect()">MASUK CONSOLE</button>
     </div>
 
-    <!-- SCREEN 2: DATABASE CONSOLE -->
+    <!-- MAIN CONSOLE PANEL -->
     <div id="consoleScreen" style="display: none; flex-direction: column; gap: 15px;">
-      <div class="db-selector" id="dbChipList"></div>
-
       <div class="node-panel">
         <div style="font-weight: bold; color: #039be5; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
-          <span id="rootDbName">root</span>
+          <span id="rootDbTitle">root</span>
           <button class="btn-icon btn-add" style="font-size: 13px;" onclick="addRootChild()">➕ Tambah Root Node</button>
         </div>
-        <div id="treeContent">Loading data...</div>
+        <div id="treeContent">Memuat data...</div>
       </div>
     </div>
   </div>
 
 <script>
-  let activeKey = localStorage.getItem('fb_console_key') || '';
-  let activeDb = '';
+  let activeKey = localStorage.getItem('fb_key') || '';
+  let activeDb = localStorage.getItem('fb_db') || '';
 
-  if (activeKey) {
+  if (activeKey && activeDb) {
     document.getElementById('apiKeyInput').value = activeKey;
-    loginWithKey();
+    document.getElementById('dbNameInput').value = activeDb;
+    loginAndConnect();
   }
 
-  async function loginWithKey() {
+  async function loginAndConnect() {
     const key = document.getElementById('apiKeyInput').value.trim();
-    if (!key) return alert('Masukkan API Key!');
+    const db = document.getElementById('dbNameInput').value.trim().toLowerCase();
+
+    if (!key || !db) return alert('Harap isi API Key dan Nama Database!');
 
     try {
-      const res = await fetch('/api/databases', {
+      const res = await fetch('/api/db/' + db, {
         headers: { 'Authorization': 'Bearer ' + key }
       });
       const json = await res.json();
 
       if (json.success) {
         activeKey = key;
-        localStorage.setItem('fb_console_key', key);
-        document.getElementById('activeKeyTag').textContent = key.substring(0, 12) + '...';
+        activeDb = db;
+        localStorage.setItem('fb_key', key);
+        localStorage.setItem('fb_db', db);
+
         document.getElementById('loginScreen').style.display = 'none';
         document.getElementById('consoleScreen').style.display = 'flex';
-        
-        renderDbChips(json.databases);
-        if (json.databases.length > 0) {
-          selectDb(json.databases[0]);
-        }
+        document.getElementById('btnLogout').style.display = 'block';
+        document.getElementById('rootDbTitle').textContent = '📂 root (' + db + ')';
+
+        renderTreeContent(json.data);
       } else {
-        alert('API Key Salah atau Tidak Valid!');
+        alert('Gagal Masuk: ' + json.error);
       }
     } catch (err) {
-      alert('Gagal terhubung ke server!');
+      alert('Koneksi Gagal! Pastikan API Key dan Nama Database Benar.');
     }
   }
 
-  function renderDbChips(dbs) {
-    const list = document.getElementById('dbChipList');
-    list.innerHTML = '';
-    dbs.forEach(db => {
-      const chip = document.createElement('div');
-      chip.className = 'db-chip ' + (db === activeDb ? 'active' : '');
-      chip.textContent = '📂 ' + db;
-      chip.onclick = () => selectDb(db);
-      list.appendChild(chip);
-    });
+  function logout() {
+    localStorage.removeItem('fb_key');
+    localStorage.removeItem('fb_db');
+    location.reload();
   }
 
-  async function selectDb(dbName) {
-    activeDb = dbName;
-    document.getElementById('rootDbName').textContent = '📂 ' + dbName;
-    
-    // Refresh chips
-    const chips = document.querySelectorAll('.db-chip');
-    chips.forEach(c => c.classList.remove('active'));
-    chips.forEach(c => {
-      if (c.textContent.includes(dbName)) c.classList.add('active');
-    });
-
-    loadTree();
-  }
-
-  async function loadTree() {
-    if (!activeDb) return;
+  async function refreshTree() {
     try {
       const res = await fetch('/api/db/' + activeDb, {
         headers: { 'Authorization': 'Bearer ' + activeKey }
       });
       const json = await res.json();
+      if (json.success) renderTreeContent(json.data);
+    } catch(err) {}
+  }
 
-      if (json.success) {
-        document.getElementById('treeContent').innerHTML = renderTree(json.data, '');
-      }
-    } catch (err) {
-      console.error(err);
-    }
+  function renderTreeContent(data) {
+    document.getElementById('treeContent').innerHTML = renderTree(data, '');
   }
 
   function renderTree(obj, path) {
@@ -357,7 +334,6 @@ app.get('/', (req, res) => {
       html += renderTree(val, currentPath);
       html += isObject ? '}' : '';
       
-      // Tombol aksi interaktif
       html += '<button class="btn-icon btn-add" onclick="addChildNode(\'' + currentPath + '\')">➕</button>';
       if (!isObject) {
         html += '<button class="btn-icon btn-edit" onclick="editNodeValue(\'' + currentPath + '\', \'' + val + '\')">✏️</button>';
@@ -368,9 +344,8 @@ app.get('/', (req, res) => {
     return html;
   }
 
-  // TAMBAH CHILD NODE
   async function addChildNode(parentPath) {
-    const key = prompt('Masukkan Nama Key Baru (misal: user001 atau pesan):');
+    const key = prompt('Masukkan Nama Key Baru:');
     if (!key) return;
     const rawVal = prompt('Masukkan Value (String/Angka/JSON):');
     
@@ -385,7 +360,6 @@ app.get('/', (req, res) => {
     addChildNode('');
   }
 
-  // EDIT VALUE NODE
   async function editNodeValue(path, oldVal) {
     const newVal = prompt('Edit Value untuk ' + path + ':', oldVal);
     if (newVal === null) return;
@@ -396,7 +370,6 @@ app.get('/', (req, res) => {
     await setNodeApi(path, value);
   }
 
-  // SET DATA TO API
   async function setNodeApi(path, value) {
     try {
       const res = await fetch('/api/db/' + activeDb + '/' + path, {
@@ -409,16 +382,15 @@ app.get('/', (req, res) => {
       });
       const json = await res.json();
       if (json.success) {
-        loadTree();
+        refreshTree();
       } else {
-        alert('Gagal update: ' + json.error);
+        alert('Gagal simpan: ' + json.error);
       }
     } catch(err) {
       alert('Error koneksi!');
     }
   }
 
-  // HAPUS NODE
   async function deleteNode(path) {
     if (!confirm('Hapus node "' + path + '"?')) return;
     try {
@@ -427,7 +399,7 @@ app.get('/', (req, res) => {
         headers: { 'Authorization': 'Bearer ' + activeKey }
       });
       const json = await res.json();
-      if (json.success) loadTree();
+      if (json.success) refreshTree();
     } catch(err) {
       alert('Gagal hapus!');
     }
@@ -439,7 +411,7 @@ app.get('/', (req, res) => {
 });
 
 // ==========================================
-// 5. REST API ENDPOINTS (TREE BASED)
+// 5. REST API ENDPOINTS
 // ==========================================
 app.get('/api/databases', apiKeyAuth, async (req, res) => {
   try {
