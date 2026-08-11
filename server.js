@@ -14,7 +14,6 @@ const API_KEYS_FILE = path.join(DATA_DIR, '_api_keys.json');
 const MSG_TRACKER_FILE = path.join(DATA_DIR, '_msg_tracker.json');
 const BASE_URL = 'https://databasetele.pie.host';
 
-// MASTER KEY PERMANEN (TIDAK AKAN HILANG MELEWAT RE-DEPLOY)
 const MASTER_KEY = process.env.MASTER_KEY || 'masterkey123';
 
 // ==========================================
@@ -170,7 +169,6 @@ async function apiKeyAuth(req, res, next) {
 
   const clientKey = authHeader.split(' ')[1];
   
-  // Izinkan jika menggunakan Master Key atau API Key terdaftar
   if (clientKey === MASTER_KEY) {
     req.appName = 'Master Admin';
     return next();
@@ -182,11 +180,11 @@ async function apiKeyAuth(req, res, next) {
     return next();
   }
 
-  return res.status(403).json({ success: false, error: 'API Key Tidak Valid atau Telah Dicabut!' });
+  return res.status(403).json({ success: false, error: 'API Key Tidak Valid!' });
 }
 
 // ==========================================
-// 4. FIREBASE CONSOLE WEB GUI
+// 4. WEB DASHBOARD CONSOLE (DIRECT MODE)
 // ==========================================
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -211,8 +209,6 @@ app.get('/', (req, res) => {
     .input-group input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; outline: none; }
     .btn-login { width: 100%; background: #039be5; color: #fff; border: none; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 10px; }
 
-    .error-box { background: #ffebee; color: #c62828; padding: 10px; border-radius: 6px; font-size: 13px; font-weight: bold; margin-bottom: 10px; display: none; text-align: left; border: 1px solid #ffcdd2; }
-
     .node-panel { background: #fff; border-radius: 8px; border: 1px solid #e0e0e0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); padding: 20px; font-family: monospace; font-size: 13px; line-height: 1.8; overflow-x: auto; }
     .tree-row { margin-left: 18px; border-left: 2px solid #e0e0e0; padding-left: 10px; margin-top: 4px; }
     .key-name { color: #d32f2f; font-weight: bold; }
@@ -236,21 +232,19 @@ app.get('/', (req, res) => {
   <div class="container">
     <div class="login-card" id="loginScreen">
       <h2 style="margin-bottom: 5px;">🔐 Akses Database</h2>
-      <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Masukkan Kunci API dan Nama Database milikmu:</p>
-      
-      <div class="error-box" id="errorBox"></div>
+      <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Masukkan API Key dan Nama Database milikmu:</p>
 
       <div class="input-group">
         <label>API KEY:</label>
-        <input type="text" id="apiKeyInput" placeholder="Contoh: key_xxxx atau masterkey123">
+        <input type="text" id="apiKeyInput" value="masterkey123">
       </div>
 
       <div class="input-group">
         <label>NAMA DATABASE:</label>
-        <input type="text" id="dbNameInput" placeholder="Contoh: chatapp">
+        <input type="text" id="dbNameInput" value="chatapp">
       </div>
 
-      <button class="btn-login" id="btnSubmit" onclick="loginAndConnect()">MASUK CONSOLE</button>
+      <button class="btn-login" onclick="openConsole()">MASUK CONSOLE</button>
     </div>
 
     <div id="consoleScreen" style="display: none; flex-direction: column; gap: 15px;">
@@ -265,85 +259,48 @@ app.get('/', (req, res) => {
   </div>
 
 <script>
-  var activeKey = localStorage.getItem('fb_key') || '';
-  var activeDb = localStorage.getItem('fb_db') || '';
+  var activeKey = '';
+  var activeDb = '';
 
-  if (activeKey && activeDb) {
-    document.getElementById('apiKeyInput').value = activeKey;
-    document.getElementById('dbNameInput').value = activeDb;
-  }
+  function openConsole() {
+    activeKey = document.getElementById('apiKeyInput').value.trim();
+    activeDb = document.getElementById('dbNameInput').value.trim().toLowerCase();
 
-  function showError(msg) {
-    var box = document.getElementById('errorBox');
-    box.textContent = '⚠️ ' + msg;
-    box.style.display = 'block';
-  }
-
-  function hideError() {
-    var box = document.getElementById('errorBox');
-    box.style.display = 'none';
-  }
-
-  function loginAndConnect() {
-    hideError();
-    var key = document.getElementById('apiKeyInput').value.trim();
-    var db = document.getElementById('dbNameInput').value.trim().toLowerCase();
-    var btn = document.getElementById('btnSubmit');
-
-    if (!key || !db) {
-      showError('Harap isi API Key dan Nama Database!');
+    if (!activeKey || !activeDb) {
+      alert('Isi API Key dan Nama Database!');
       return;
     }
 
-    btn.textContent = 'MEMUAT...';
-    btn.disabled = true;
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('consoleScreen').style.display = 'flex';
+    document.getElementById('btnLogout').style.display = 'block';
+    document.getElementById('rootDbTitle').textContent = '📂 root (' + activeDb + ')';
 
-    fetch('/api/db/' + db, {
-      method: 'GET',
-      headers: { 'Authorization': 'Bearer ' + key }
-    })
-    .then(function(res) { return res.json(); })
-    .then(function(json) {
-      btn.textContent = 'MASUK CONSOLE';
-      btn.disabled = false;
-
-      if (json.success) {
-        activeKey = key;
-        activeDb = db;
-        localStorage.setItem('fb_key', key);
-        localStorage.setItem('fb_db', db);
-
-        document.getElementById('loginScreen').style.display = 'none';
-        document.getElementById('consoleScreen').style.display = 'flex';
-        document.getElementById('btnLogout').style.display = 'block';
-        document.getElementById('rootDbTitle').textContent = '📂 root (' + db + ')';
-
-        renderTreeContent(json.data);
-      } else {
-        showError(json.error || 'Akses ditolak!');
-      }
-    })
-    .catch(function(err) {
-      btn.textContent = 'MASUK CONSOLE';
-      btn.disabled = false;
-      showError('Koneksi Gagal! Periksa jaringan atau API Key.');
-    });
+    loadData();
   }
 
-  function logout() {
-    localStorage.removeItem('fb_key');
-    localStorage.removeItem('fb_db');
-    location.reload();
-  }
-
-  function refreshTree() {
+  function loadData() {
+    document.getElementById('treeContent').innerHTML = '<i>Menghubungkan ke database...</i>';
+    
     fetch('/api/db/' + activeDb, {
+      method: 'GET',
       headers: { 'Authorization': 'Bearer ' + activeKey }
     })
     .then(function(res) { return res.json(); })
     .then(function(json) {
-      if (json.success) renderTreeContent(json.data);
+      if (json.success) {
+        renderTreeContent(json.data);
+      } else {
+        document.getElementById('treeContent').innerHTML = '<b style="color:red;">Gagal: ' + json.error + '</b>';
+      }
+    })
+    .catch(function(err) {
+      document.getElementById('treeContent').innerHTML = '<b style="color:red;">Error koneksi ke database.</b>';
     });
+  }
+
+  function logout() {
+    location.reload();
   }
 
   function renderTreeContent(data) {
@@ -380,9 +337,9 @@ app.get('/', (req, res) => {
   }
 
   function addChildNode(parentPath) {
-    var key = prompt('Masukkan Nama Key Baru:');
+    var key = prompt('Nama Key Baru:');
     if (!key) return;
-    var rawVal = prompt('Masukkan Value:');
+    var rawVal = prompt('Value:');
     
     var value = rawVal;
     try { value = JSON.parse(rawVal); } catch(e) {}
@@ -396,7 +353,7 @@ app.get('/', (req, res) => {
   }
 
   function editNodeValue(path, oldVal) {
-    var newVal = prompt('Edit Value untuk ' + path + ':', oldVal);
+    var newVal = prompt('Edit Value:', oldVal);
     if (newVal === null) return;
 
     var value = newVal;
@@ -417,7 +374,7 @@ app.get('/', (req, res) => {
     .then(function(res) { return res.json(); })
     .then(function(json) {
       if (json.success) {
-        refreshTree();
+        loadData();
       } else {
         alert('Gagal simpan: ' + json.error);
       }
@@ -432,7 +389,7 @@ app.get('/', (req, res) => {
     })
     .then(function(res) { return res.json(); })
     .then(function(json) {
-      if (json.success) refreshTree();
+      if (json.success) loadData();
     });
   }
 </script>
