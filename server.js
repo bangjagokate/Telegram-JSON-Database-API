@@ -177,7 +177,7 @@ async function apiKeyAuth(req, res, next) {
 }
 
 // ==========================================
-// 4. FIREBASE CONSOLE WEB GUI (PAKEM MODE)
+// 4. FIREBASE CONSOLE WEB GUI
 // ==========================================
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -185,7 +185,7 @@ app.get('/', (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Firebase Console Manager</title>
+  <title>Firebase Realtime Console</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { background: #f0f2f5; color: #1c1e21; min-height: 100vh; display: flex; flex-direction: column; }
@@ -223,10 +223,9 @@ app.get('/', (req, res) => {
   </div>
 
   <div class="container">
-    <!-- FORM LOGIN API KEY & DB NAME -->
     <div class="login-card" id="loginScreen">
       <h2 style="margin-bottom: 5px;">🔐 Akses Database</h2>
-      <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Masukkan Kunci API dan Nama Database milikmu:</p>
+      <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Masukkan API Key dan Nama Database milikmu:</p>
       
       <div class="input-group">
         <label>API KEY:</label>
@@ -238,10 +237,9 @@ app.get('/', (req, res) => {
         <input type="text" id="dbNameInput" placeholder="Contoh: chatapp">
       </div>
 
-      <button class="btn-login" onclick="loginAndConnect()">MASUK CONSOLE</button>
+      <button class="btn-login" id="btnSubmit" onclick="loginAndConnect()">MASUK CONSOLE</button>
     </div>
 
-    <!-- MAIN CONSOLE PANEL -->
     <div id="consoleScreen" style="display: none; flex-direction: column; gap: 15px;">
       <div class="node-panel">
         <div style="font-weight: bold; color: #039be5; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
@@ -254,26 +252,35 @@ app.get('/', (req, res) => {
   </div>
 
 <script>
-  let activeKey = localStorage.getItem('fb_key') || '';
-  let activeDb = localStorage.getItem('fb_db') || '';
+  var activeKey = localStorage.getItem('fb_key') || '';
+  var activeDb = localStorage.getItem('fb_db') || '';
 
   if (activeKey && activeDb) {
     document.getElementById('apiKeyInput').value = activeKey;
     document.getElementById('dbNameInput').value = activeDb;
-    loginAndConnect();
   }
 
-  async function loginAndConnect() {
-    const key = document.getElementById('apiKeyInput').value.trim();
-    const db = document.getElementById('dbNameInput').value.trim().toLowerCase();
+  function loginAndConnect() {
+    var key = document.getElementById('apiKeyInput').value.trim();
+    var db = document.getElementById('dbNameInput').value.trim().toLowerCase();
+    var btn = document.getElementById('btnSubmit');
 
-    if (!key || !db) return alert('Harap isi API Key dan Nama Database!');
+    if (!key || !db) {
+      alert('Harap isi API Key dan Nama Database!');
+      return;
+    }
 
-    try {
-      const res = await fetch('/api/db/' + db, {
-        headers: { 'Authorization': 'Bearer ' + key }
-      });
-      const json = await res.json();
+    btn.textContent = 'MEMUAT...';
+    btn.disabled = true;
+
+    fetch('/api/db/' + db, {
+      method: 'GET',
+      headers: { 'Authorization': 'Bearer ' + key }
+    })
+    .then(function(res) { return res.json(); })
+    .then(function(json) {
+      btn.textContent = 'MASUK CONSOLE';
+      btn.disabled = false;
 
       if (json.success) {
         activeKey = key;
@@ -288,11 +295,14 @@ app.get('/', (req, res) => {
 
         renderTreeContent(json.data);
       } else {
-        alert('Gagal Masuk: ' + json.error);
+        alert('Gagal Masuk: ' + (json.error || 'Akses ditolak!'));
       }
-    } catch (err) {
-      alert('Koneksi Gagal! Pastikan API Key dan Nama Database Benar.');
-    }
+    })
+    .catch(function(err) {
+      btn.textContent = 'MASUK CONSOLE';
+      btn.disabled = false;
+      alert('Koneksi Gagal! Periksa API Key & Nama Database.');
+    });
   }
 
   function logout() {
@@ -301,14 +311,14 @@ app.get('/', (req, res) => {
     location.reload();
   }
 
-  async function refreshTree() {
-    try {
-      const res = await fetch('/api/db/' + activeDb, {
-        headers: { 'Authorization': 'Bearer ' + activeKey }
-      });
-      const json = await res.json();
+  function refreshTree() {
+    fetch('/api/db/' + activeDb, {
+      headers: { 'Authorization': 'Bearer ' + activeKey }
+    })
+    .then(function(res) { return res.json(); })
+    .then(function(json) {
       if (json.success) renderTreeContent(json.data);
-    } catch(err) {}
+    });
   }
 
   function renderTreeContent(data) {
@@ -317,16 +327,16 @@ app.get('/', (req, res) => {
 
   function renderTree(obj, path) {
     if (typeof obj !== 'object' || obj === null) {
-      const isStr = typeof obj === 'string';
-      const valClass = isStr ? 'val-str' : 'val-num';
+      var isStr = typeof obj === 'string';
+      var valClass = isStr ? 'val-str' : 'val-num';
       return '<span class="' + valClass + '">' + (isStr ? '"' + obj + '"' : obj) + '</span>';
     }
 
-    let html = '';
-    for (let key in obj) {
-      const currentPath = path ? path + '/' + key : key;
-      const val = obj[key];
-      const isObject = typeof val === 'object' && val !== null;
+    var html = '';
+    for (var key in obj) {
+      var currentPath = path ? path + '/' + key : key;
+      var val = obj[key];
+      var isObject = typeof val === 'object' && val !== null;
 
       html += '<div class="tree-row">';
       html += '<span class="key-name">"' + key + '"</span>: ';
@@ -344,65 +354,61 @@ app.get('/', (req, res) => {
     return html;
   }
 
-  async function addChildNode(parentPath) {
-    const key = prompt('Masukkan Nama Key Baru:');
+  function addChildNode(parentPath) {
+    var key = prompt('Masukkan Nama Key Baru:');
     if (!key) return;
-    const rawVal = prompt('Masukkan Value (String/Angka/JSON):');
+    var rawVal = prompt('Masukkan Value:');
     
-    let value = rawVal;
+    var value = rawVal;
     try { value = JSON.parse(rawVal); } catch(e) {}
 
-    const fullPath = parentPath ? parentPath + '/' + key : key;
-    await setNodeApi(fullPath, value);
+    var fullPath = parentPath ? parentPath + '/' + key : key;
+    setNodeApi(fullPath, value);
   }
 
   function addRootChild() {
     addChildNode('');
   }
 
-  async function editNodeValue(path, oldVal) {
-    const newVal = prompt('Edit Value untuk ' + path + ':', oldVal);
+  function editNodeValue(path, oldVal) {
+    var newVal = prompt('Edit Value untuk ' + path + ':', oldVal);
     if (newVal === null) return;
 
-    let value = newVal;
+    var value = newVal;
     try { value = JSON.parse(newVal); } catch(e) {}
 
-    await setNodeApi(path, value);
+    setNodeApi(path, value);
   }
 
-  async function setNodeApi(path, value) {
-    try {
-      const res = await fetch('/api/db/' + activeDb + '/' + path, {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer ' + activeKey,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ value: value })
-      });
-      const json = await res.json();
+  function setNodeApi(path, value) {
+    fetch('/api/db/' + activeDb + '/' + path, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + activeKey,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ value: value })
+    })
+    .then(function(res) { return res.json(); })
+    .then(function(json) {
       if (json.success) {
         refreshTree();
       } else {
         alert('Gagal simpan: ' + json.error);
       }
-    } catch(err) {
-      alert('Error koneksi!');
-    }
+    });
   }
 
-  async function deleteNode(path) {
+  function deleteNode(path) {
     if (!confirm('Hapus node "' + path + '"?')) return;
-    try {
-      const res = await fetch('/api/db/' + activeDb + '/' + path, {
-        method: 'DELETE',
-        headers: { 'Authorization': 'Bearer ' + activeKey }
-      });
-      const json = await res.json();
+    fetch('/api/db/' + activeDb + '/' + path, {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + activeKey }
+    })
+    .then(function(res) { return res.json(); })
+    .then(function(json) {
       if (json.success) refreshTree();
-    } catch(err) {
-      alert('Gagal hapus!');
-    }
+    });
   }
 </script>
 
