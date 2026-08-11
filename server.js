@@ -23,9 +23,7 @@ async function ensureDataDir() {
     try {
       await fs.access(API_KEYS_FILE);
     } catch (e) {
-      const defaultKey = process.env.API_KEY || 'Jd8Kp2xQ9mV7sL4nR6tY3wA8zC5eF1uH';
-      const initialKeys = { [defaultKey]: { app_name: 'Master Key Admin', created_at: new Date().toISOString() } };
-      await fs.writeFile(API_KEYS_FILE, JSON.stringify(initialKeys, null, 2), 'utf8');
+      await fs.writeFile(API_KEYS_FILE, JSON.stringify({}, null, 2), 'utf8');
     }
   } catch (err) {}
 }
@@ -56,7 +54,6 @@ async function deleteApiKey(key) {
   return false;
 }
 
-// Tracking Message ID agar 1 DB HANYA punya 1 pesan/file aktif di Grup
 async function getMsgTracker() {
   try {
     const raw = await fs.readFile(MSG_TRACKER_FILE, 'utf8');
@@ -95,13 +92,16 @@ async function getDatabase(dbName) {
   return JSON.parse(raw);
 }
 
+// HANYA BISA MEMBUAT DATABASE JIKA DIMAUKAN EKSPLISIT
 async function createDatabase(dbName, initialData = []) {
   await ensureDataDir();
   const filePath = getFilePath(dbName);
   try {
     await fs.access(filePath);
-    return await getDatabase(dbName);
-  } catch (e) {}
+    throw new Error(`Database '${dbName}' sudah ada.`);
+  } catch (e) {
+    if (e.message.includes('sudah ada')) throw e;
+  }
 
   const payload = {
     _meta: { database: dbName, version: 1, created_at: new Date().toISOString() },
@@ -123,7 +123,7 @@ async function deleteDatabaseFile(dbName) {
 }
 
 // ==========================================
-// 2. SMART AUTO-REPLACE BACKUP ENGINE
+// 2. BACKUP ENGINE
 // ==========================================
 async function sendBackupToTelegramGroup(dbName) {
   if (!bot) return;
@@ -136,24 +136,19 @@ async function sendBackupToTelegramGroup(dbName) {
     const buffer = Buffer.from(content, 'utf8');
     const tracker = await getMsgTracker();
 
-    // Hapus pesan file lama di grup jika ada (supaya file tidak menumpuk)
     if (tracker[dbName]) {
       try {
         await bot.telegram.deleteMessage(groupId, tracker[dbName]);
-      } catch (delErr) {
-        // Abaikan jika pesan lama sudah terhapus
-      }
+      } catch (delErr) {}
     }
 
     const caption = `📦 *LIVE AUTO-BACKUP DATABASE*\n📄 Database: \`${dbName}\`\n🕒 Update Terakhir: ${new Date().toLocaleString('id-ID')}`;
     
-    // Kirim file backup versi terbaru
     const sentMsg = await bot.telegram.sendDocument(groupId, {
       source: buffer,
       filename: `${dbName}.json`
     }, { caption, parse_mode: 'Markdown' });
 
-    // Simpan ID pesan baru untuk di-replace pada backup berikutnya
     if (sentMsg && sentMsg.message_id) {
       await saveMsgTracker(dbName, sentMsg.message_id);
     }
@@ -163,7 +158,7 @@ async function sendBackupToTelegramGroup(dbName) {
 }
 
 // ==========================================
-// 3. EXPRESS APP & AUTH
+// 3. EXPRESS APP & STRICT AUTH
 // ==========================================
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -173,17 +168,18 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public/admin.html')));
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok', telegram: !!bot, uptime: Math.floor(process.uptime()) }));
 
+// PERKETAT AUTHENTICATION
 async function apiKeyAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, error: 'Format Authorization harus: Bearer API_KEY' });
+    return res.status(401).json({ success: false, error: 'Akses Ditolak! Format Authorization: Bearer API_KEY' });
   }
 
   const clientKey = authHeader.split(' ')[1];
   const validKeys = await getValidApiKeys();
 
   if (!validKeys[clientKey]) {
-    return res.status(403).json({ success: false, error: 'API Key tidak valid atau telah dicabut' });
+    return res.status(403).json({ success: false, error: 'API Key Tidak Valid atau Telah Dicabut!' });
   }
 
   req.appName = validKeys[clientKey].app_name;
@@ -191,7 +187,7 @@ async function apiKeyAuth(req, res, next) {
 }
 
 // ==========================================
-// 4. REST API ENDPOINTS
+// 4. REST API ENDPOINTS (STRICT MODE)
 // ==========================================
 app.get('/api/databases', apiKeyAuth, async (req, res) => {
   try {
@@ -207,7 +203,7 @@ app.get('/api/db/:name', apiKeyAuth, async (req, res) => {
     const data = await getDatabase(req.params.name);
     res.json({ success: true, data });
   } catch (err) {
-    res.status(404).json({ success: false, error: err.message });
+    res.status(404).json({ success: false, error: `Database '${req.params.name}' tidak ditemukan!` });
   }
 });
 
@@ -236,27 +232,19 @@ app.delete('/api/db/:name', apiKeyAuth, async (req, res) => {
 
 app.get('/api/db/:name/records', apiKeyAuth, async (req, res) => {
   try {
-    let db;
-    try {
-      db = await getDatabase(req.params.name);
-    } catch (e) {
-      db = await createDatabase(req.params.name, []);
-    }
+    const db = await getDatabase(req.params.name);
     res.json({ success: true, total: db.data.length, data: db.data });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    // JIKA DATABASE BELUM ADA -> TOLAK DENGAN 404 (TIDAK ADA AUTO-CREATE)
+    res.status(404).json({ success: false, error: `Database '${req.params.name}' belum dibuat. Silakan buat via Bot Telegram!` });
   }
 });
 
-// AUTO BACKUP REALTIME + AUTO REPLACE DI GRUP TELEGRAM
+// POST RECORD DENGAN MODE STRICT (TIDAK DIBUATKAN DB OTOMATIS)
 app.post('/api/db/:name/records', apiKeyAuth, async (req, res) => {
   try {
-    let db;
-    try {
-      db = await getDatabase(req.params.name);
-    } catch (e) {
-      db = await createDatabase(req.params.name, []);
-    }
+    // Coba ambil database, jika belum ada LANGSUNG ERROR (Gak dibuatin otomatis lagi)
+    const db = await getDatabase(req.params.name);
 
     const newRecord = {
       id: generateRecordId(req.params.name.substring(0, 3)),
@@ -266,12 +254,11 @@ app.post('/api/db/:name/records', apiKeyAuth, async (req, res) => {
     db.data.push(newRecord);
     await fs.writeFile(getFilePath(req.params.name), JSON.stringify(db, null, 2), 'utf8');
 
-    // Otomatis menimpa file backup di grup tanpa bikin pesan baru bertumpuk!
     sendBackupToTelegramGroup(req.params.name).catch(() => {});
-
     res.status(201).json({ success: true, data: newRecord });
   } catch (err) {
-    res.status(400).json({ success: false, error: err.message });
+    // Menolak request jika DB belum dibuat lebih dulu
+    res.status(400).json({ success: false, error: `Gagal simpan data: Database '${req.params.name}' belum dibuat di server!` });
   }
 });
 
@@ -311,25 +298,27 @@ if (process.env.BOT_TOKEN) {
     bot.hears('📖 Panduan & Endpoint URL', adminMiddleware, (ctx) => sendMainMenu(ctx));
 
     bot.hears('🔑 Buat API Key', adminMiddleware, (ctx) => {
-      ctx.reply('⚠️ Ketik perintah pembuatannya beserta nama aplikasinya:\n\n*Contoh:*\n`/makeapi listrik`', { parse_mode: 'Markdown' });
+      ctx.reply('⚠️ Ketik perintah pembuatannya beserta nama aplikasinya:\n\n*Contoh:*\n`/makeapi chatapp`', { parse_mode: 'Markdown' });
     });
 
     bot.command('makeapi', adminMiddleware, async (ctx) => {
       const args = ctx.message.text.split(' ').slice(1);
       const rawName = args.join(' ');
-      if (!rawName) return ctx.reply('⚠️ Masukkan nama aplikasi. Contoh: `/makeapi listrik`', { parse_mode: 'Markdown' });
+      if (!rawName) return ctx.reply('⚠️ Masukkan nama aplikasi. Contoh: `/makeapi chatapp`', { parse_mode: 'Markdown' });
 
       const dbName = rawName.toLowerCase().replace(/[^a-z0-9_-]/g, '');
       const newKey = `key_${crypto.randomBytes(12).toString('hex')}`;
 
       await saveApiKey(newKey, rawName);
-      await createDatabase(dbName, []);
-      await sendBackupToTelegramGroup(dbName);
+      try {
+        await createDatabase(dbName, []);
+        await sendBackupToTelegramGroup(dbName);
+      } catch (e) {}
 
       ctx.reply(
         `✅ *API KEY & DATABASE BERHASIL DIBUAT!*\n\n` +
         `📱 *Nama Aplikasi:* ${rawName}\n` +
-        `📂 *Database Otomatis:* \`${dbName}\`\n` +
+        `📂 *Database:* \`${dbName}\`\n` +
         `🔑 *API Key:* \`${newKey}\`\n\n` +
         `----------------------------------------\n` +
         `📋 *HEADER AUTHENTICATION (WAJIB):*\n` +
@@ -399,7 +388,7 @@ if (process.env.BOT_TOKEN) {
     bot.command('get', adminMiddleware, async (ctx) => {
       const args = ctx.message.text.split(' ').slice(1);
       const name = args[0];
-      if (!name) return ctx.reply('⚠️ Masukkan nama DB. Contoh: `/get chating`', { parse_mode: 'Markdown' });
+      if (!name) return ctx.reply('⚠️ Masukkan nama DB. Contoh: `/get chatapp`', { parse_mode: 'Markdown' });
       try {
         const db = await getDatabase(name);
         ctx.reply(`📄 *Data ${name}:*\n\`\`\`json\n${JSON.stringify(db, null, 2)}\n\`\`\``, { parse_mode: 'Markdown' });
@@ -411,7 +400,7 @@ if (process.env.BOT_TOKEN) {
     bot.command('backup', adminMiddleware, async (ctx) => {
       const args = ctx.message.text.split(' ').slice(1);
       const name = args[0];
-      if (!name) return ctx.reply('⚠️ Masukkan nama DB. Contoh: `/backup chating`', { parse_mode: 'Markdown' });
+      if (!name) return ctx.reply('⚠️ Masukkan nama DB. Contoh: `/backup chatapp`', { parse_mode: 'Markdown' });
       try {
         await sendBackupToTelegramGroup(name);
         ctx.reply(`📦 File backup \`${name}\` di Grup Telegram telah diperbarui!`, { parse_mode: 'Markdown' });
