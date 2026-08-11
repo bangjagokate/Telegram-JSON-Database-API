@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Documentation - Telegram JSON DB</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; margin: 0; padding: 20px; background: #f8fafc; color: #1e293b; }
+    .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+    h1 { border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; color: #0f172a; }
+    .method { font-weight: bold; padding: 4px 8px; border-radius: 4px; color: white; display: inline-block; width: 60px; text-align: center; }
+    .get { background: #22c55e; } .post { background: #3b82f6; } .put { background: #eab308; } .patch { background: #a855f7; } .delete { background: #ef4444; }
+    .endpoint { background: #f1f5f9; padding: 12px; border-radius: 6px; margin: 10px 0; font-family: monospace; }
+    pre { background: #0f172a; color: #f8fafc; padding: 15px; border-radius: 8px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📄 Telegram JSON DB - API Documentation</h1>
+    <p>Gunakan Header berikut untuk setiap request:</p>
+    <pre>Authorization: Bearer YOUR_API_KEY</pre>
+
+    <h2>Database Endpoints</h2>
+    <div class="endpoint"><span class="method get">GET</span> /api/databases - Ambil seluruh daftar database</div>
+    <div class="endpoint"><span class="method get">GET</span> /api/db/:name - Ambil isi satu database</div>
+    <div class="endpoint"><span class="method post">POST</span> /api/db/:name - Buat database baru</div>
+    <div class="endpoint"><span class="method put">PUT</span> /api/db/:name - Timpa isi database</div>
+    <div class="endpoint"><span class="method patch">PATCH</span> /api/db/:name - Patch metadata/isi database</div>
+    <div class="endpoint"><span class="method delete">DELETE</span> /api/db/:name - Hapus database</div>
+
+    <h2>Record Endpoints</h2>
+    <div class="endpoint"><span class="method get">GET</span> /api/db/:name/records - Ambil semua record</div>
+    <div class="endpoint"><span class="method post">POST</span> /api/db/:name/records - Tambah record baru</div>
+    <div class="endpoint"><span class="method get">GET</span> /api/db/:name/records/:id - Ambil detail 1 record</div>
+    <div class="endpoint"><span class="method put">PUT</span> /api/db/:name/records/:id - Update total 1 record</div>
+    <div class="endpoint"><span class="method patch">PATCH</span> /api/db/:name/records/:id - Partial update 1 record</div>
+    <div class="endpoint"><span class="method delete">DELETE</span> /api/db/:name/records/:id - Hapus record</div>
+
+    <h2>Contoh Usage (JavaScript Fetch)</h2>
+    <pre>
+// POST Record Baru
+fetch("https://domain-anda.com/api/db/users/records", {
+  method: "POST",
+  headers: {
+    "Authorization": "Bearer YOUR_API_KEY",
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    name: "Budi",
+    email: "budi@example.com"
+  })
+})
+.then(res => res.json())
+.then(data => console.log(data));
+    </pre>
+  </div>
+</body>
+</html>
