@@ -10,7 +10,7 @@ const { executeBackup, backupAll, restoreFromGroup } = require('./backup');
 function initBot() {
   const token = process.env.BOT_TOKEN;
   if (!token) {
-    console.warn('[Telegram Bot] BOT_TOKEN missing. Telegram Bot will be disabled.');
+    console.warn('[Telegram Bot] BOT_TOKEN tidak ditemukan di Environment Variables. Fitur Bot dinonaktifkan.');
     return null;
   }
 
@@ -24,7 +24,7 @@ function initBot() {
 
   bot.use(async (ctx, next) => {
     if (!isAdmin(ctx)) {
-      return ctx.reply('⛔ Unauthorized: Access restricted to registered Admins only.');
+      return ctx.reply('⛔ Unauthorized: Akses terbatas hanya untuk Admin.');
     }
     return next();
   });
@@ -138,7 +138,6 @@ function initBot() {
           `- Uptime: ${Math.floor(process.uptime())} detik\n` +
           `- RAM Usage: ${memoryUsage} MB\n` +
           `- Total Database: ${dbs.length}\n` +
-          `- Telegram Group Storage: Connected\n` +
           `- Environment: ${process.env.NODE_ENV || 'development'}`,
         { parse_mode: 'Markdown' }
       );
@@ -147,7 +146,14 @@ function initBot() {
     }
   });
 
-  bot.launch().then(() => console.log('[Telegram Bot] Successfully started.')).catch((err) => console.error('[Telegram Bot] Launch failed:', err.message));
+  // Launch Bot tanpa menghentikan server jika terjadi gagal koneksi
+  bot.launch()
+    .then(() => console.log('[Telegram Bot] Berhasil terhubung ke Telegram API.'))
+    .catch((err) => console.error('[Telegram Bot Error] Gagal konek (Server REST API tetap jalan):', err.message));
+
+  // Menangani penutupan aplikasi secara bersahaja
+  process.once('SIGINT', () => bot.stop('SIGINT'));
+  process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
   return bot;
 }
