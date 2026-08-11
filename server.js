@@ -14,10 +14,8 @@ const API_KEYS_FILE = path.join(DATA_DIR, '_api_keys.json');
 const MSG_TRACKER_FILE = path.join(DATA_DIR, '_msg_tracker.json');
 const BASE_URL = 'https://databasetele.pie.host';
 
-const MASTER_KEY = process.env.MASTER_KEY || 'masterkey123';
-
 // ==========================================
-// 1. HELPER STORAGE & FILESYSTEM
+// 1. HELPER STORAGE & TRACKER FILE
 // ==========================================
 async function ensureDataDir() {
   try {
@@ -71,6 +69,10 @@ async function saveMsgTracker(dbName, messageId) {
   await fs.writeFile(MSG_TRACKER_FILE, JSON.stringify(tracker, null, 2), 'utf8');
 }
 
+function generateRecordId(prefix = 'rec') {
+  return `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
+}
+
 function getFilePath(dbName) {
   const clean = dbName.toLowerCase().trim().replace(/[^a-z0-9_-]/g, '');
   if (!clean) throw new Error('Nama database tidak valid.');
@@ -90,19 +92,20 @@ async function getDatabase(dbName) {
   return JSON.parse(raw);
 }
 
-async function createDatabase(dbName, initialObj = {}) {
+// HANYA BISA MEMBUAT DATABASE JIKA DIMAUKAN EKSPLISIT
+async function createDatabase(dbName, initialData = []) {
   await ensureDataDir();
   const filePath = getFilePath(dbName);
   try {
     await fs.access(filePath);
-    return await getDatabase(dbName);
-  } catch (e) {}
+    throw new Error(`Database '${dbName}' sudah ada.`);
+  } catch (e) {
+    if (e.message.includes('sudah ada')) throw e;
+  }
 
   const payload = {
-    users: {},
-    chats: {},
-    rooms: {},
-    ...initialObj
+    _meta: { database: dbName, version: 1, created_at: new Date().toISOString() },
+    data: Array.isArray(initialData) ? initialData : []
   };
   await fs.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
   return payload;
@@ -139,7 +142,7 @@ async function sendBackupToTelegramGroup(dbName) {
       } catch (delErr) {}
     }
 
-    const caption = `📦 *FIREBASE CONSOLE AUTO-BACKUP*\n📄 Database: \`${dbName}\`\n🕒 Update: ${new Date().toLocaleString('id-ID')}`;
+    const caption = `📦 *LIVE AUTO-BACKUP DATABASE*\n📄 Database: \`${dbName}\`\n🕒 Update Terakhir: ${new Date().toLocaleString('id-ID')}`;
     
     const sentMsg = await bot.telegram.sendDocument(groupId, {
       source: buffer,
@@ -150,256 +153,41 @@ async function sendBackupToTelegramGroup(dbName) {
       await saveMsgTracker(dbName, sentMsg.message_id);
     }
   } catch (err) {
-    console.error(`[Backup Error ${dbName}]`, err.message);
+    console.error(`[Auto Backup Error ${dbName}]`, err.message);
   }
 }
 
 // ==========================================
-// 3. EXPRESS APP & MIDDLEWARE
+// 3. EXPRESS APP & STRICT AUTH
 // ==========================================
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.static(path.join(__dirname, 'public')));
 
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public/admin.html')));
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok', telegram: !!bot, uptime: Math.floor(process.uptime()) }));
+
+// PERKETAT AUTHENTICATION
 async function apiKeyAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, error: 'Format Authorization: Bearer API_KEY' });
+    return res.status(401).json({ success: false, error: 'Akses Ditolak! Format Authorization: Bearer API_KEY' });
   }
 
   const clientKey = authHeader.split(' ')[1];
-  
-  if (clientKey === MASTER_KEY) {
-    req.appName = 'Master Admin';
-    return next();
-  }
-
   const validKeys = await getValidApiKeys();
-  if (validKeys[clientKey]) {
-    req.appName = validKeys[clientKey].app_name;
-    return next();
+
+  if (!validKeys[clientKey]) {
+    return res.status(403).json({ success: false, error: 'API Key Tidak Valid atau Telah Dicabut!' });
   }
 
-  return res.status(403).json({ success: false, error: 'API Key Tidak Valid!' });
+  req.appName = validKeys[clientKey].app_name;
+  next();
 }
 
 // ==========================================
-// 4. WEB DASHBOARD CONSOLE (DIRECT MODE)
-// ==========================================
-app.get('/', (req, res) => {
-  res.send(`<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Firebase Realtime Console</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background: #f0f2f5; color: #1c1e21; min-height: 100vh; display: flex; flex-direction: column; }
-    
-    .navbar { background: #039be5; color: #fff; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-    .navbar h1 { font-size: 18px; font-weight: 600; }
-    .btn-logout { background: #d32f2f; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; }
-
-    .container { flex: 1; display: flex; flex-direction: column; padding: 15px; max-width: 900px; margin: 0 auto; width: 100%; gap: 15px; }
-
-    .login-card { background: #fff; border-radius: 8px; padding: 25px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; margin-top: 30px; }
-    .input-group { margin: 12px 0; text-align: left; }
-    .input-group label { display: block; font-size: 12px; font-weight: bold; color: #555; margin-bottom: 5px; }
-    .input-group input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; outline: none; }
-    .btn-login { width: 100%; background: #039be5; color: #fff; border: none; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 10px; }
-
-    .node-panel { background: #fff; border-radius: 8px; border: 1px solid #e0e0e0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); padding: 20px; font-family: monospace; font-size: 13px; line-height: 1.8; overflow-x: auto; }
-    .tree-row { margin-left: 18px; border-left: 2px solid #e0e0e0; padding-left: 10px; margin-top: 4px; }
-    .key-name { color: #d32f2f; font-weight: bold; }
-    .val-str { color: #2e7d32; }
-    .val-num { color: #1976d2; }
-    
-    .btn-icon { background: none; border: none; font-size: 11px; cursor: pointer; margin-left: 6px; padding: 2px 5px; border-radius: 3px; }
-    .btn-icon:hover { background: #eeeeee; }
-    .btn-add { color: #1976d2; }
-    .btn-edit { color: #f57c00; }
-    .btn-del { color: #d32f2f; }
-  </style>
-</head>
-<body>
-
-  <div class="navbar">
-    <h1>🔥 Firebase Realtime Console</h1>
-    <button class="btn-logout" id="btnLogout" style="display:none;" onclick="logout()">LOGOUT</button>
-  </div>
-
-  <div class="container">
-    <div class="login-card" id="loginScreen">
-      <h2 style="margin-bottom: 5px;">🔐 Akses Database</h2>
-      <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Masukkan API Key dan Nama Database milikmu:</p>
-
-      <div class="input-group">
-        <label>API KEY:</label>
-        <input type="text" id="apiKeyInput" value="masterkey123">
-      </div>
-
-      <div class="input-group">
-        <label>NAMA DATABASE:</label>
-        <input type="text" id="dbNameInput" value="chatapp">
-      </div>
-
-      <button class="btn-login" onclick="openConsole()">MASUK CONSOLE</button>
-    </div>
-
-    <div id="consoleScreen" style="display: none; flex-direction: column; gap: 15px;">
-      <div class="node-panel">
-        <div style="font-weight: bold; color: #039be5; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
-          <span id="rootDbTitle">root</span>
-          <button class="btn-icon btn-add" style="font-size: 13px;" onclick="addRootChild()">➕ Tambah Root Node</button>
-        </div>
-        <div id="treeContent">Memuat data...</div>
-      </div>
-    </div>
-  </div>
-
-<script>
-  var activeKey = '';
-  var activeDb = '';
-
-  function openConsole() {
-    activeKey = document.getElementById('apiKeyInput').value.trim();
-    activeDb = document.getElementById('dbNameInput').value.trim().toLowerCase();
-
-    if (!activeKey || !activeDb) {
-      alert('Isi API Key dan Nama Database!');
-      return;
-    }
-
-    document.getElementById('loginScreen').style.display = 'none';
-    document.getElementById('consoleScreen').style.display = 'flex';
-    document.getElementById('btnLogout').style.display = 'block';
-    document.getElementById('rootDbTitle').textContent = '📂 root (' + activeDb + ')';
-
-    loadData();
-  }
-
-  function loadData() {
-    document.getElementById('treeContent').innerHTML = '<i>Menghubungkan ke database...</i>';
-    
-    fetch('/api/db/' + activeDb, {
-      method: 'GET',
-      headers: { 'Authorization': 'Bearer ' + activeKey }
-    })
-    .then(function(res) { return res.json(); })
-    .then(function(json) {
-      if (json.success) {
-        renderTreeContent(json.data);
-      } else {
-        document.getElementById('treeContent').innerHTML = '<b style="color:red;">Gagal: ' + json.error + '</b>';
-      }
-    })
-    .catch(function(err) {
-      document.getElementById('treeContent').innerHTML = '<b style="color:red;">Error koneksi ke database.</b>';
-    });
-  }
-
-  function logout() {
-    location.reload();
-  }
-
-  function renderTreeContent(data) {
-    document.getElementById('treeContent').innerHTML = renderTree(data, '');
-  }
-
-  function renderTree(obj, path) {
-    if (typeof obj !== 'object' || obj === null) {
-      var isStr = typeof obj === 'string';
-      var valClass = isStr ? 'val-str' : 'val-num';
-      return '<span class="' + valClass + '">' + (isStr ? '"' + obj + '"' : obj) + '</span>';
-    }
-
-    var html = '';
-    for (var key in obj) {
-      var currentPath = path ? path + '/' + key : key;
-      var val = obj[key];
-      var isObject = typeof val === 'object' && val !== null;
-
-      html += '<div class="tree-row">';
-      html += '<span class="key-name">"' + key + '"</span>: ';
-      html += isObject ? '{' : '';
-      html += renderTree(val, currentPath);
-      html += isObject ? '}' : '';
-      
-      html += '<button class="btn-icon btn-add" onclick="addChildNode(\'' + currentPath + '\')">➕</button>';
-      if (!isObject) {
-        html += '<button class="btn-icon btn-edit" onclick="editNodeValue(\'' + currentPath + '\', \'' + val + '\')">✏️</button>';
-      }
-      html += '<button class="btn-icon btn-del" onclick="deleteNode(\'' + currentPath + '\')">🗑️</button>';
-      html += '</div>';
-    }
-    return html;
-  }
-
-  function addChildNode(parentPath) {
-    var key = prompt('Nama Key Baru:');
-    if (!key) return;
-    var rawVal = prompt('Value:');
-    
-    var value = rawVal;
-    try { value = JSON.parse(rawVal); } catch(e) {}
-
-    var fullPath = parentPath ? parentPath + '/' + key : key;
-    setNodeApi(fullPath, value);
-  }
-
-  function addRootChild() {
-    addChildNode('');
-  }
-
-  function editNodeValue(path, oldVal) {
-    var newVal = prompt('Edit Value:', oldVal);
-    if (newVal === null) return;
-
-    var value = newVal;
-    try { value = JSON.parse(newVal); } catch(e) {}
-
-    setNodeApi(path, value);
-  }
-
-  function setNodeApi(path, value) {
-    fetch('/api/db/' + activeDb + '/' + path, {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + activeKey,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ value: value })
-    })
-    .then(function(res) { return res.json(); })
-    .then(function(json) {
-      if (json.success) {
-        loadData();
-      } else {
-        alert('Gagal simpan: ' + json.error);
-      }
-    });
-  }
-
-  function deleteNode(path) {
-    if (!confirm('Hapus node "' + path + '"?')) return;
-    fetch('/api/db/' + activeDb + '/' + path, {
-      method: 'DELETE',
-      headers: { 'Authorization': 'Bearer ' + activeKey }
-    })
-    .then(function(res) { return res.json(); })
-    .then(function(json) {
-      if (json.success) loadData();
-    });
-  }
-</script>
-
-</body>
-</html>`);
-});
-
-// ==========================================
-// 5. REST API ENDPOINTS
+// 4. REST API ENDPOINTS (STRICT MODE)
 // ==========================================
 app.get('/api/databases', apiKeyAuth, async (req, res) => {
   try {
@@ -415,82 +203,67 @@ app.get('/api/db/:name', apiKeyAuth, async (req, res) => {
     const data = await getDatabase(req.params.name);
     res.json({ success: true, data });
   } catch (err) {
-    res.status(404).json({ success: false, error: `Database '${req.params.name}' tidak ditemukan.` });
+    res.status(404).json({ success: false, error: `Database '${req.params.name}' tidak ditemukan!` });
   }
 });
 
-app.get('/api/db/:name/*', apiKeyAuth, async (req, res) => {
+app.post('/api/db/:name', apiKeyAuth, async (req, res) => {
   try {
-    const db = await getDatabase(req.params.name);
-    const nodePath = req.params[0].split('/').filter(Boolean);
-
-    let current = db;
-    for (const key of nodePath) {
-      if (current[key] === undefined) {
-        return res.status(404).json({ success: false, error: `Node '${nodePath.join('/')}' tidak ditemukan.` });
-      }
-      current = current[key];
-    }
-
-    res.json({ success: true, node: nodePath.join('/'), data: current });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/db/:name/*', apiKeyAuth, async (req, res) => {
-  try {
-    let db = await getDatabase(req.params.name);
-    const nodePath = req.params[0].split('/').filter(Boolean);
-    const valueToSet = req.body.value !== undefined ? req.body.value : req.body;
-
-    let current = db;
-    for (let i = 0; i < nodePath.length - 1; i++) {
-      const key = nodePath[i];
-      if (!current[key] || typeof current[key] !== 'object') {
-        current[key] = {};
-      }
-      current = current[key];
-    }
-
-    const lastKey = nodePath[nodePath.length - 1];
-    current[lastKey] = valueToSet;
-
-    await fs.writeFile(getFilePath(req.params.name), JSON.stringify(db, null, 2), 'utf8');
+    const data = await createDatabase(req.params.name, req.body.data || []);
     sendBackupToTelegramGroup(req.params.name).catch(() => {});
-
-    res.json({ success: true, path: nodePath.join('/'), data: valueToSet });
+    res.json({ success: true, data });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }
 });
 
-app.delete('/api/db/:name/*', apiKeyAuth, async (req, res) => {
+app.delete('/api/db/:name', apiKeyAuth, async (req, res) => {
   try {
-    let db = await getDatabase(req.params.name);
-    const nodePath = req.params[0].split('/').filter(Boolean);
-
-    let current = db;
-    for (let i = 0; i < nodePath.length - 1; i++) {
-      const key = nodePath[i];
-      if (!current[key]) return res.status(404).json({ success: false, error: 'Node tidak ditemukan' });
-      current = current[key];
+    const deleted = await deleteDatabaseFile(req.params.name);
+    if (deleted) {
+      res.json({ success: true, message: `Database '${req.params.name}' berhasil dihapus.` });
+    } else {
+      res.status(404).json({ success: false, error: `Database '${req.params.name}' tidak ditemukan.` });
     }
-
-    const lastKey = nodePath[nodePath.length - 1];
-    delete current[lastKey];
-
-    await fs.writeFile(getFilePath(req.params.name), JSON.stringify(db, null, 2), 'utf8');
-    sendBackupToTelegramGroup(req.params.name).catch(() => {});
-
-    res.json({ success: true, message: `Node '${nodePath.join('/')}' berhasil dihapus.` });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
+app.get('/api/db/:name/records', apiKeyAuth, async (req, res) => {
+  try {
+    const db = await getDatabase(req.params.name);
+    res.json({ success: true, total: db.data.length, data: db.data });
+  } catch (err) {
+    // JIKA DATABASE BELUM ADA -> TOLAK DENGAN 404 (TIDAK ADA AUTO-CREATE)
+    res.status(404).json({ success: false, error: `Database '${req.params.name}' belum dibuat. Silakan buat via Bot Telegram!` });
+  }
+});
+
+// POST RECORD DENGAN MODE STRICT (TIDAK DIBUATKAN DB OTOMATIS)
+app.post('/api/db/:name/records', apiKeyAuth, async (req, res) => {
+  try {
+    // Coba ambil database, jika belum ada LANGSUNG ERROR (Gak dibuatin otomatis lagi)
+    const db = await getDatabase(req.params.name);
+
+    const newRecord = {
+      id: generateRecordId(req.params.name.substring(0, 3)),
+      ...req.body,
+      created_at: new Date().toISOString()
+    };
+    db.data.push(newRecord);
+    await fs.writeFile(getFilePath(req.params.name), JSON.stringify(db, null, 2), 'utf8');
+
+    sendBackupToTelegramGroup(req.params.name).catch(() => {});
+    res.status(201).json({ success: true, data: newRecord });
+  } catch (err) {
+    // Menolak request jika DB belum dibuat lebih dulu
+    res.status(400).json({ success: false, error: `Gagal simpan data: Database '${req.params.name}' belum dibuat di server!` });
+  }
+});
+
 // ==========================================
-// 6. BOT TELEGRAM WITH MENU BUTTONS
+// 5. BOT TELEGRAM WITH MENU BUTTONS
 // ==========================================
 let bot = null;
 if (process.env.BOT_TOKEN) {
@@ -508,7 +281,8 @@ if (process.env.BOT_TOKEN) {
 
     const sendMainMenu = (ctx) => {
       ctx.reply(
-        '🤖 *PANEL UTAMA TELEGRAM JSON DB*\n\nSilakan klik tombol di bawah:',
+        '🤖 *PANEL UTAMA TELEGRAM JSON DB*\n\n' +
+        'Silakan klik tombol di bawah:',
         {
           parse_mode: 'Markdown',
           ...Markup.keyboard([
@@ -536,8 +310,10 @@ if (process.env.BOT_TOKEN) {
       const newKey = `key_${crypto.randomBytes(12).toString('hex')}`;
 
       await saveApiKey(newKey, rawName);
-      await createDatabase(dbName, {});
-      await sendBackupToTelegramGroup(dbName);
+      try {
+        await createDatabase(dbName, []);
+        await sendBackupToTelegramGroup(dbName);
+      } catch (e) {}
 
       ctx.reply(
         `✅ *API KEY & DATABASE BERHASIL DIBUAT!*\n\n` +
@@ -545,13 +321,17 @@ if (process.env.BOT_TOKEN) {
         `📂 *Database:* \`${dbName}\`\n` +
         `🔑 *API Key:* \`${newKey}\`\n\n` +
         `----------------------------------------\n` +
-        `🌐 *WEB CONSOLE (FIREBASE STYLE):*\n` +
-        `\`${BASE_URL}\`\n\n` +
+        `📋 *HEADER AUTHENTICATION (WAJIB):*\n` +
+        `• Key: \`Authorization\`\n` +
+        `• Value: \`Bearer ${newKey}\`\n\n` +
         `----------------------------------------\n` +
-        `📋 *ENDPOINT API NODE:*\n` +
-        `• Set User: \`POST ${BASE_URL}/api/db/${dbName}/users/user001\`\n` +
-        `• Get User: \`GET ${BASE_URL}/api/db/${dbName}/users/user001\`\n` +
-        `• Set Chat: \`POST ${BASE_URL}/api/db/${dbName}/chats/chat001\``,
+        `🌐 *DAFTAR URL ENDPOINT API:*\n\n` +
+        `1️⃣ *Ambil Semua Record Data:*\n` +
+        `\`GET ${BASE_URL}/api/db/${dbName}/records\`\n\n` +
+        `2️⃣ *Tambah Record Baru:*\n` +
+        `\`POST ${BASE_URL}/api/db/${dbName}/records\`\n\n` +
+        `3️⃣ *Hapus Database Ini:*\n` +
+        `\`DELETE ${BASE_URL}/api/db/${dbName}\``,
         { parse_mode: 'Markdown' }
       );
     });
@@ -584,7 +364,7 @@ if (process.env.BOT_TOKEN) {
         await sendBackupToTelegramGroup(name);
         ctx.reply(
           `✅ Database \`${name}\` Berhasil Dibuat!\n\n` +
-          `🌐 *URL Console:*\n\`${BASE_URL}\``,
+          `🌐 *URL Endpoint Data:*\n\`${BASE_URL}/api/db/${name}/records\``,
           { parse_mode: 'Markdown' }
         );
       } catch (err) {
@@ -602,6 +382,18 @@ if (process.env.BOT_TOKEN) {
         ctx.reply(`🗑️ Database \`${name}\` berhasil dihapus permanen!`, { parse_mode: 'Markdown' });
       } else {
         ctx.reply(`❌ Database \`${name}\` tidak ditemukan.`, { parse_mode: 'Markdown' });
+      }
+    });
+
+    bot.command('get', adminMiddleware, async (ctx) => {
+      const args = ctx.message.text.split(' ').slice(1);
+      const name = args[0];
+      if (!name) return ctx.reply('⚠️ Masukkan nama DB. Contoh: `/get chatapp`', { parse_mode: 'Markdown' });
+      try {
+        const db = await getDatabase(name);
+        ctx.reply(`📄 *Data ${name}:*\n\`\`\`json\n${JSON.stringify(db, null, 2)}\n\`\`\``, { parse_mode: 'Markdown' });
+      } catch (err) {
+        ctx.reply(`❌ Error: ${err.message}`);
       }
     });
 
@@ -637,7 +429,7 @@ if (process.env.BOT_TOKEN) {
 }
 
 // ==========================================
-// 7. SERVER RUNNER
+// 6. SERVER RUNNER
 // ==========================================
 process.on('uncaughtException', (err) => console.error('[Uncaught Exception]', err.message));
 process.on('unhandledRejection', (reason) => console.error('[Unhandled Rejection]', reason));
