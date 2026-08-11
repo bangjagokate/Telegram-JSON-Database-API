@@ -78,14 +78,16 @@ async function getDatabase(dbName) {
   return JSON.parse(raw);
 }
 
+// FUNGSI BUAT DATABASE (AMAN JIKA SUDAH ADA)
 async function createDatabase(dbName, initialData = []) {
   await ensureDataDir();
   const filePath = getFilePath(dbName);
   try {
     await fs.access(filePath);
-    throw new Error(`Database '${dbName}' sudah ada.`);
+    // Jika sudah ada, kembalikan isi yang lama
+    return await getDatabase(dbName);
   } catch (e) {
-    if (e.message.includes('sudah ada')) throw e;
+    // Jika belum ada, buat file baru
   }
 
   const payload = {
@@ -101,16 +103,20 @@ async function sendBackupToTelegramGroup(dbName) {
   const groupId = process.env.GROUP_ID;
   if (!groupId) return;
 
-  const filePath = getFilePath(dbName);
-  const content = await fs.readFile(filePath, 'utf8');
-  const buffer = Buffer.from(content, 'utf8');
+  try {
+    const filePath = getFilePath(dbName);
+    const content = await fs.readFile(filePath, 'utf8');
+    const buffer = Buffer.from(content, 'utf8');
 
-  const caption = `📦 *BACKUP DATABASE JSON*\n📄 Database: \`${dbName}\`\n🕒 Waktu: ${new Date().toLocaleString('id-ID')}`;
-  
-  await bot.telegram.sendDocument(groupId, {
-    source: buffer,
-    filename: `database_${dbName}.json`
-  }, { caption, parse_mode: 'Markdown' });
+    const caption = `📦 *BACKUP DATABASE JSON*\n📄 Database: \`${dbName}\`\n🕒 Waktu: ${new Date().toLocaleString('id-ID')}`;
+    
+    await bot.telegram.sendDocument(groupId, {
+      source: buffer,
+      filename: `database_${dbName}.json`
+    }, { caption, parse_mode: 'Markdown' });
+  } catch (err) {
+    console.error(`[Backup Error ${dbName}]`, err.message);
+  }
 }
 
 // ==========================================
@@ -174,16 +180,29 @@ app.post('/api/db/:name', apiKeyAuth, async (req, res) => {
 
 app.get('/api/db/:name/records', apiKeyAuth, async (req, res) => {
   try {
-    const db = await getDatabase(req.params.name);
+    let db;
+    try {
+      db = await getDatabase(req.params.name);
+    } catch (e) {
+      // Auto-create jika DB belum ada
+      db = await createDatabase(req.params.name, []);
+    }
     res.json({ success: true, total: db.data.length, data: db.data });
   } catch (err) {
-    res.status(404).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
 app.post('/api/db/:name/records', apiKeyAuth, async (req, res) => {
   try {
-    const db = await getDatabase(req.params.name);
+    let db;
+    try {
+      db = await getDatabase(req.params.name);
+    } catch (e) {
+      // Auto-create jika DB belum ada
+      db = await createDatabase(req.params.name, []);
+    }
+
     const newRecord = {
       id: generateRecordId(req.params.name.substring(0, 3)),
       ...req.body,
@@ -216,11 +235,10 @@ if (process.env.BOT_TOKEN) {
       return next();
     };
 
-    // FUNGSI PANDUAN DENGAN TOMBOL MENU
     const sendMainMenu = (ctx) => {
       ctx.reply(
         '🤖 *PANEL UTAMA TELEGRAM JSON DB*\n\n' +
-        'Silakan klik tombol di bawah atau ketik perintah manual jika diperlukan:',
+        'Silakan klik tombol di bawah:',
         {
           parse_mode: 'Markdown',
           ...Markup.keyboard([
@@ -235,25 +253,30 @@ if (process.env.BOT_TOKEN) {
     bot.start(adminMiddleware, (ctx) => sendMainMenu(ctx));
     bot.hears('📖 Panduan & Endpoint URL', adminMiddleware, (ctx) => sendMainMenu(ctx));
 
-    // TOMBOL: BUAT API KEY
     bot.hears('🔑 Buat API Key', adminMiddleware, (ctx) => {
-      ctx.reply('⚠️ Silakan ketik perintah pembuatannya beserta nama aplikasinya:\n\n*Contoh:*\n`/makeapi Aplikasi Listrik`\natau\n`/makeapi Aplikasi Laundry`', { parse_mode: 'Markdown' });
+      ctx.reply('⚠️ Ketik perintah pembuatannya beserta nama aplikasinya:\n\n*Contoh:*\n`/makeapi listrik`\natau\n`/makeapi laundry`', { parse_mode: 'Markdown' });
     });
 
-    // COMMAND MAKEAPI DENGAN TEMPLATE FORMAT LENGKAP
+    // COMMAND MAKEAPI: OTOMATIS MEMBUAT DATABASE JUGA
     bot.command('makeapi', adminMiddleware, async (ctx) => {
       const args = ctx.message.text.split(' ').slice(1);
-      const appName = args.join(' ');
-      if (!appName) return ctx.reply('⚠️ Masukkan nama aplikasi. Contoh: `/makeapi Aplikasi Listrik`', { parse_mode: 'Markdown' });
+      const rawName = args.join(' ');
+      if (!rawName) return ctx.reply('⚠️ Masukkan nama aplikasi. Contoh: `/makeapi listrik`', { parse_mode: 'Markdown' });
 
+      const dbName = rawName.toLowerCase().replace(/[^a-z0-9_-]/g, '');
       const newKey = `key_${crypto.randomBytes(12).toString('hex')}`;
-      await saveApiKey(newKey, appName);
 
-      const dbExample = appName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      // 1. Simpan API Key Baru
+      await saveApiKey(newKey, rawName);
+
+      // 2. OTOMATIS BUAT DATABASE DENGAN NAMA SAMA
+      await createDatabase(dbName, []);
+      sendBackupToTelegramGroup(dbName).catch(() => {});
 
       ctx.reply(
-        `✅ *API KEY BERHASIL DIBUAT!*\n\n` +
-        `📱 *Nama Aplikasi:* ${appName}\n` +
+        `✅ *API KEY & DATABASE BERHASIL DIBUAT!*\n\n` +
+        `📱 *Nama Aplikasi:* ${rawName}\n` +
+        `📂 *Database Otomatis:* \`${dbName}\`\n` +
         `🔑 *API Key:* \`${newKey}\`\n\n` +
         `----------------------------------------\n` +
         `📋 *HEADER AUTHENTICATION (WAJIB):*\n` +
@@ -261,40 +284,35 @@ if (process.env.BOT_TOKEN) {
         `• Value: \`Bearer ${newKey}\`\n\n` +
         `----------------------------------------\n` +
         `🌐 *DAFTAR URL ENDPOINT API:*\n\n` +
-        `1️⃣ *Ambil Semua Daftar Database:*\n` +
-        `\`GET ${BASE_URL}/api/databases\`\n\n` +
-        `2️⃣ *Ambil Semua Record Data (Load Data):*\n` +
-        `\`GET ${BASE_URL}/api/db/${dbExample}/records\`\n\n` +
-        `3️⃣ *Tambah Record Baru (Kirim Data/Pesan):*\n` +
-        `\`POST ${BASE_URL}/api/db/${dbExample}/records\`\n\n` +
-        `4️⃣ *Buat Database Baru via API:*\n` +
-        `\`POST ${BASE_URL}/api/db/${dbExample}\``,
+        `1️⃣ *Ambil Semua Record Data (Load Data):*\n` +
+        `\`GET ${BASE_URL}/api/db/${dbName}/records\`\n\n` +
+        `2️⃣ *Tambah Record Baru (Kirim Data/Pesan):*\n` +
+        `\`POST ${BASE_URL}/api/db/${dbName}/records\`\n\n` +
+        `3️⃣ *Cek Isi Seluruh Database:*\n` +
+        `\`GET ${BASE_URL}/api/db/${dbName}\``,
         { parse_mode: 'Markdown' }
       );
     });
 
-    // TOMBOL: LIST ALL API
     bot.hears('📜 Lihat Semua API Key', adminMiddleware, async (ctx) => {
       const keys = await getValidApiKeys();
       const list = Object.entries(keys).map(([k, v]) => `📱 *${v.app_name}*:\n  • Key: \`${k}\`\n  • Header: \`Bearer ${k}\``).join('\n\n');
       ctx.reply(`🔑 *DAFTAR API KEY AKTIF:*\n\n${list || 'Belum ada API Key.'}\n\n*Cara Hapus Key:* \`/revokeapi <key>\``, { parse_mode: 'Markdown' });
     });
 
-    // TOMBOL: DAFTAR DATABASE
     bot.hears('📂 Daftar Database', adminMiddleware, async (ctx) => {
       const dbs = await listDatabases();
       ctx.reply(`📂 *Total Database:* ${dbs.length}\n\n` + dbs.map(d => `• \`${d}\` (URL: \`${BASE_URL}/api/db/${d}/records\`)`).join('\n\n'), { parse_mode: 'Markdown' });
     });
 
-    // TOMBOL: BUAT DB BARU
     bot.hears('➕ Buat DB Baru', adminMiddleware, (ctx) => {
-      ctx.reply('⚠️ Ketik perintah ini beserta nama database baru yang mau dibuat:\n\n*Contoh:*\n`/createdb listrik`', { parse_mode: 'Markdown' });
+      ctx.reply('⚠️ Ketik perintah ini beserta nama database baru:\n\n*Contoh:*\n`/createdb laundry`', { parse_mode: 'Markdown' });
     });
 
     bot.command('createdb', adminMiddleware, async (ctx) => {
       const args = ctx.message.text.split(' ').slice(1);
       const name = args[0];
-      if (!name) return ctx.reply('⚠️ Masukkan nama DB. Contoh: `/createdb listrik`', { parse_mode: 'Markdown' });
+      if (!name) return ctx.reply('⚠️ Masukkan nama DB. Contoh: `/createdb laundry`', { parse_mode: 'Markdown' });
       try {
         await createDatabase(name);
         await sendBackupToTelegramGroup(name);
@@ -311,7 +329,7 @@ if (process.env.BOT_TOKEN) {
     bot.command('get', adminMiddleware, async (ctx) => {
       const args = ctx.message.text.split(' ').slice(1);
       const name = args[0];
-      if (!name) return ctx.reply('⚠️ Masukkan nama DB. Contoh: `/get listrik`', { parse_mode: 'Markdown' });
+      if (!name) return ctx.reply('⚠️ Masukkan nama DB. Contoh: `/get chating`', { parse_mode: 'Markdown' });
       try {
         const db = await getDatabase(name);
         ctx.reply(`📄 *Data ${name}:*\n\`\`\`json\n${JSON.stringify(db, null, 2)}\n\`\`\``, { parse_mode: 'Markdown' });
@@ -323,7 +341,7 @@ if (process.env.BOT_TOKEN) {
     bot.command('backup', adminMiddleware, async (ctx) => {
       const args = ctx.message.text.split(' ').slice(1);
       const name = args[0];
-      if (!name) return ctx.reply('⚠️ Masukkan nama DB. Contoh: `/backup listrik`', { parse_mode: 'Markdown' });
+      if (!name) return ctx.reply('⚠️ Masukkan nama DB. Contoh: `/backup chating`', { parse_mode: 'Markdown' });
       try {
         await sendBackupToTelegramGroup(name);
         ctx.reply(`📦 File backup \`${name}\` berhasil dikirim ke Grup Telegram!`, { parse_mode: 'Markdown' });
