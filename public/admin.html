@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard - Telegram JSON DB</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; background: #0f172a; color: #f8fafc; }
+    .header { padding: 15px 20px; background: #1e293b; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; }
+    .main { display: flex; flex-direction: column; padding: 20px; gap: 20px; max-width: 1200px; margin: 0 auto; }
+    .card { background: #1e293b; padding: 20px; border-radius: 8px; border: 1px solid #334155; }
+    input, button, textarea { padding: 10px; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: white; margin-bottom: 10px; }
+    button { background: #2563eb; cursor: pointer; font-weight: bold; border: none; }
+    button:hover { background: #1d4ed8; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px; }
+    pre { background: #020617; padding: 10px; border-radius: 6px; overflow-x: auto; max-height: 400px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h3>⚙️ Telegram JSON DB Admin Panel</h3>
+    <a href="/docs.html" style="color: #60a5fa;">API Docs</a>
+  </div>
+
+  <div class="main">
+    <div class="card">
+      <h4>🔑 Credentials API Key</h4>
+      <input type="password" id="apiKey" placeholder="Masukkan API_KEY Anda" style="width: 100%;">
+      <button onclick="loadDatabases()">Connect & Load Data</button>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h4>📂 Database List</h4>
+        <div id="dbList">Klik "Connect & Load Data"</div>
+        <br>
+        <input type="text" id="newDbName" placeholder="Nama Database Baru">
+        <button onclick="createNewDb()">+ Create Database</button>
+      </div>
+
+      <div class="card">
+        <h4>📊 System Health Status</h4>
+        <div id="healthStatus">Loading health...</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h4>📄 JSON Viewer & Editor</h4>
+      <input type="text" id="activeDb" placeholder="Database terpilih" readonly>
+      <button onclick="backupCurrentDb()">Backup Telegram</button>
+      <button onclick="restoreCurrentDb()">Restore Telegram</button>
+      <textarea id="jsonEditor" style="width: 100%; height: 250px; font-family: monospace;"></textarea>
+    </div>
+  </div>
+
+  <script>
+    async function checkHealth() {
+      const res = await fetch('/health');
+      const data = await res.json();
+      document.getElementById('healthStatus').innerHTML = `
+        <p>Status: <b>${data.status}</b></p>
+        <p>Telegram: <b>${data.telegram ? 'Connected' : 'Disconnected'}</b></p>
+        <p>Uptime: <b>${data.uptime}s</b></p>
+      `;
+    }
+    checkHealth();
+
+    async function loadDatabases() {
+      const key = document.getElementById('apiKey').value;
+      const res = await fetch('/api/databases', { headers: { 'Authorization': `Bearer ${key}` }});
+      const data = await res.json();
+      if (!data.success) return alert(data.error);
+
+      const html = data.databases.map(db => `
+        <div style="margin-bottom: 5px;">
+          <button onclick="viewDb('${db}')">${db}</button>
+        </div>
+      `).join('');
+      document.getElementById('dbList').innerHTML = html || 'Belum ada database.';
+    }
+
+    async function viewDb(name) {
+      const key = document.getElementById('apiKey').value;
+      document.getElementById('activeDb').value = name;
+      const res = await fetch(`/api/db/${name}`, { headers: { 'Authorization': `Bearer ${key}` }});
+      const data = await res.json();
+      document.getElementById('jsonEditor').value = JSON.stringify(data.data, null, 2);
+    }
+
+    async function createNewDb() {
+      const key = document.getElementById('apiKey').value;
+      const name = document.getElementById('newDbName').value;
+      if (!name) return alert('Nama DB kosong');
+      const res = await fetch(`/api/db/${name}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: [] })
+      });
+      const data = await res.json();
+      if(data.success) { loadDatabases(); } else { alert(data.error); }
+    }
+
+    async function backupCurrentDb() {
+      const key = document.getElementById('apiKey').value;
+      const name = document.getElementById('activeDb').value;
+      const res = await fetch(`/api/db/${name}/backup`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${key}` }
+      });
+      const data = await res.json();
+      alert(data.success ? 'Backup berhasil dikirim ke Group Telegram!' : data.error);
+    }
+
+    async function restoreCurrentDb() {
+      const key = document.getElementById('apiKey').value;
+      const name = document.getElementById('activeDb').value;
+      const res = await fetch(`/api/db/${name}/restore`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${key}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert('Restore Berhasil!');
+        viewDb(name);
+      } else { alert(data.error); }
+    }
+  </script>
+</body>
+</html>
