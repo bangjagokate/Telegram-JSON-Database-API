@@ -69,6 +69,14 @@ async function saveMsgTracker(dbName, messageId) {
   await fs.writeFile(MSG_TRACKER_FILE, JSON.stringify(tracker, null, 2), 'utf8');
 }
 
+async function removeMsgTracker(dbName) {
+  const tracker = await getMsgTracker();
+  if (tracker[dbName]) {
+    delete tracker[dbName];
+    await fs.writeFile(MSG_TRACKER_FILE, JSON.stringify(tracker, null, 2), 'utf8');
+  }
+}
+
 function generateRecordId(prefix = 'rec') {
   return `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
 }
@@ -113,6 +121,23 @@ async function createDatabase(dbName, initialData = []) {
 
 async function deleteDatabaseFile(dbName) {
   await ensureDataDir();
+  
+  // Hapus pesan backup di Telegram Group terlebih dahulu
+  if (bot) {
+    const groupId = process.env.GROUP_ID;
+    if (groupId) {
+      const tracker = await getMsgTracker();
+      if (tracker[dbName]) {
+        try {
+          await bot.telegram.deleteMessage(groupId, tracker[dbName]);
+        } catch (delErr) {
+          console.error(`[Delete Group Message Error ${dbName}]`, delErr.message);
+        }
+        await removeMsgTracker(dbName);
+      }
+    }
+  }
+
   const filePath = getFilePath(dbName);
   try {
     await fs.unlink(filePath);
